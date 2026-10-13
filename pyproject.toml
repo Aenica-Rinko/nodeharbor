@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nodeharbor"
+version = "1.0.0"
+description = "Local proxy subscription manager with isolated Mihomo verification"
+requires-python = ">=3.10"
+readme = "README.md"
+license = "GPL-3.0-only"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+classifiers = ["Development Status :: 4 - Beta", "Programming Language :: Python :: 3", "Operating System :: Microsoft :: Windows"]
+dependencies = ["PyYAML>=6.0,<7", "requests>=2.32,<3"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "build>=1,<2"]
+windows = ["pyinstaller==6.22.3; sys_platform == 'win32'", "Pillow>=11,<13; sys_platform == 'win32'"]
+
+[project.urls]
+Repository = "https://github.com/Aenica-Rinko/nodeharbor"
+Issues = "https://github.com/Aenica-Rinko/nodeharbor/issues"
+
+[project.scripts]
+nodeharbor = "nodeharbor.cli:main"
+
+[project.gui-scripts]
+nodeharbor-desktop = "nodeharbor.desktop:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

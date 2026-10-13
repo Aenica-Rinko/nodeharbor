@@ -1,0 +1,42 @@
+version: 1
+fetch:
+  workers: 6
+  timeout_seconds: 15
+  retries: 2
+  source_timeout_seconds: 60
+  proxy: ''
+  github_mirror: ''
+  use_history: true
+  max_response_mb: 16
+  cache_minutes: 10
+  stale_cache_hours: 24
+  max_candidates: 1200
+  nodes_per_source: 200
+  github_sources: null
+  public_sources: []
+  auto_local_proxy: true
+verification:
+  mihomo_path: ''
+  workers: 24
+  batch_size: 200
+  core_client: Mihomo
+  core_paths:
+    Mihomo: ''
+    Clash-Verge-Rev: ''
+    v2rayN: ''
+  v2rayn_core: xray
+  tcp_timeout_seconds: 2
+  timeout_ms: 6000
+  test_url: http://cp.cloudflare.com/
+  https_test_url: https://www.gstatic.com/generate_204
+  rounds: 2
+  retry_failed: 1
+  max_delay_ms: 5000
+subscription:
+  port: 8199
+task:
+  timeout_seconds: 1800
+exports:
+  keep_generations: 5
+  directory: ''
+  mihomo_port: 7890

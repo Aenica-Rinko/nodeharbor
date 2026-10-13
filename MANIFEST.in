@@ -1,0 +1,19 @@
+include LICENSE README.md THIRD_PARTY_NOTICES.md pyproject.toml
+include CONTRIBUTING.md SECURITY.md NodeHarbor.py NodeHarbor.pyw Start.cmd
+include .gitignore .gitattributes
+recursive-include src/nodeharbor *.py
+recursive-include tests *.py
+recursive-include scripts *.py *.sh *.ps1 *.cmd
+recursive-include docs *.md *.png
+recursive-include docs/licenses *.txt
+prune config
+prune data
+prune logs
+prune backups
+prune runtime
+prune .release
+prune output
+prune .git
+include config/*.example.yaml config/*.example.json
+include runtime/README.md
+global-exclude *.pyc *.pyo *.pem *.key .env .env.*
