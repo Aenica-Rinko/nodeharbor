@@ -63,12 +63,16 @@ class Paths:
 
     def current(self):
         pointer = read_json(self.exports / "current.json", {})
+        if not isinstance(pointer, dict): raise AppError('当前导出指针格式错误，请重新获取或生成导出。')
         name = pointer.get("generation", "")
-        if not name or Path(name).name != name or name in (".", ".."):
+        if not isinstance(name, str) or not name or Path(name).name != name or name in (".", ".."):
             raise AppError("尚无可用导出，请先更新节点。")
         folder = self.exports / name
         if not folder.is_dir():
             raise AppError("导出版本不存在，请重新生成。")
+        if (folder.is_symlink() or getattr(folder, 'is_junction', lambda: False)()
+                or folder.resolve().parent != self.exports.resolve()):
+            raise AppError('当前导出目录不能指向其他位置，请重新生成。')
         return folder
 
 
@@ -80,7 +84,8 @@ def export_root(root, directory):
     base = Path(directory.strip()).expanduser()
     base = (base if base.is_absolute() else root / base).resolve()
     if base == root / 'data/exports': return base
-    protected = [root / name for name in ('config', 'logs', 'runtime', 'src', 'tests', 'scripts', '.release')]
+    protected = [root / name for name in ('config', 'logs', 'runtime', 'src', 'tests', 'scripts', '.release',
+                                         'dist', 'backups', '.git', '.github')]
     if base == root or any(base == p or base.is_relative_to(p) for p in protected) or base.is_relative_to(root / 'data'):
         raise AppError('导出目录不能覆盖配置、运行数据、源码或构建目录。')
     if base.exists() and not base.is_dir(): raise AppError('导出位置已存在同名文件，请选择文件夹。')
@@ -95,6 +100,8 @@ def read_yaml(path, default=None):
         return default
     except yaml.YAMLError as exc:
         raise AppError(f"配置格式错误：{Path(path).name}") from exc
+    except (OSError, UnicodeError):
+        raise AppError(f'无法读取配置文件：{Path(path).name}，请检查编码或权限。') from None
 
 
 def read_json(path, default=None):
@@ -104,6 +111,8 @@ def read_json(path, default=None):
         return default
     except ValueError as exc:
         raise AppError(f"JSON 格式错误：{Path(path).name}") from exc
+    except OSError:
+        raise AppError(f'无法读取 JSON 文件：{Path(path).name}，请检查权限。') from None
 
 
 def atomic_write(path, content):

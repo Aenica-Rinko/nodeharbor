@@ -16,12 +16,17 @@ def read_mapping(path):
     return value if isinstance(value, dict) else {}
 
 
+def nonnegative(value, default=0):
+    # Reject strings, booleans, NaN, infinity and unreasonable persisted counters.
+    return value if type(value) in (int, float) and 0 <= value < 1e15 else default
+
+
 def priority(state):
     # Previous verification evidence is retained separately from this download's status.
     if not isinstance(state, dict): return (1, 0, 0, 60)
     def number(key, default=0):
         value = state.get(key, default)
-        return value if type(value) in (int, float) and value >= 0 else default
+        return nonnegative(value, default)
     eligible, verified = number('last_eligible'), number('last_verified')
     category = 0 if verified else 2 if eligible else 1
     rate = verified / max(eligible, 1)
@@ -29,9 +34,9 @@ def priority(state):
 
 
 def fair_candidates(batches, limit, per_source, preferred=None):
-    preferred = preferred or {}
+    preferred = preferred if isinstance(preferred, dict) else {}
     queues = [deque(sorted(normalize_nodes(batch), key=lambda node: (
-        preferred.get(identity(node), float('inf')), identity(node)))) for batch in batches]
+        nonnegative(preferred.get(identity(node)), float('inf')), identity(node)))) for batch in batches]
     selected, seen, contributions = [], set(), [0] * len(queues)
     while len(selected) < limit:
         moved = False
@@ -71,7 +76,7 @@ def persist_sources(paths, report):
 
 
 def summary_text(summary):
-    if not summary: return ''
+    if not isinstance(summary, dict) or not summary: return ''
     origin = summary.get('data_origin')
     if origin == 'history_only': prefix = '本轮没有取得新数据，已重新检测历史节点。'
     elif origin == 'recheck': prefix = '本轮重新检测已有节点。'

@@ -22,8 +22,10 @@ from .pipeline import execute, status
 from .storage import AppError, Paths, read_yaml, write_yaml, read_json, write_json
 from .public_sources import GITHUB_POOLS, RECOMMENDED, LARGE_POOLS, PRESETS, selected_pools, github_file_url, source_note
 from .fetcher import fetch_all
-from .source_plan import summary_text
+from .source_plan import summary_text, read_mapping, nonnegative
 from .nodes import identity
+from .node_library import read_library
+from .source_catalog import user_pools, validate_pools, add_pool, repository_of, enabled_urls
 from .subscription import create_server
 from .tasks import Cancelled, TaskControl, NETWORK_ERRORS
 from .progress import TaskProgress, STAGES, TASKS
@@ -75,6 +77,7 @@ class Desktop:
         self.log_lines = []
         self.task_progress = None
         self.progress_panel = None
+        self.search_dialog = None
         root.title("NodeHarbor · 节点港")
         root.geometry("1120x760")
         root.minsize(940, 620)
@@ -140,7 +143,12 @@ class Desktop:
         return label
 
     def button(self, parent, title, command, primary=False, task=False):
-        button = tk.Button(parent, text=title, command=command, relief="flat", bd=0, cursor="hand2", padx=18, pady=10,
+        def invoke():
+            try: command()
+            except (AppError, OSError) as error:
+                message = str(error) if isinstance(error, AppError) else '无法访问本地文件或目录，请检查权限。'
+                messagebox.showerror('操作未完成', message, parent=self.root)
+        button = tk.Button(parent, text=title, command=invoke, relief="flat", bd=0, cursor="hand2", padx=18, pady=10,
                            bg=BLUE if primary else "#E8EDF5", fg=WHITE if primary else INK,
                            activebackground="#204FBF" if primary else "#DCE4EF", activeforeground=WHITE if primary else INK)
         if task:
@@ -155,9 +163,9 @@ class Desktop:
         for key, button in self.nav.items():
             button.config(bg="#EAF0FF" if key == page else WHITE, fg=BLUE if key == page else MUTED)
         titles = {"overview": ("所有节点，一处管理", "抓取、验证与导出都有记录，订阅保持清晰。"),
-                  "nodes": ("免费节点库", "查看最近导出的免费节点。认证信息不会显示在列表中。"),
+                  "nodes": ("免费节点库", "查看节点库中的免费节点。获取与导出分开进行，认证信息不会显示在列表中。"),
                   "subscriptions": ("获取节点，一次导出", "自动生成全部客户端格式，按客户端保存到对应文件夹。"),
-                  'sources': ('GitHub 公开来源', 'GitHub 不止这些仓库。选择内置来源，或添加其他公开文件；下载成功后仍需检测节点。'),
+                  'sources': ('GitHub 公开来源', '管理内置与自己添加的节点池。添加和启停自动记住；新加入的节点池默认停用。'),
                   "settings": ("应用设置", "配置统一保存在 config 文件夹，修改后按需重新导出。"),
                   "logs": ("运行日志", "查看执行进度与结果，失败不会替换上一份可用订阅。")}
         title, subtitle = titles[page]
@@ -165,7 +173,12 @@ class Desktop:
         self.label(self.main, subtitle, color=MUTED).pack(anchor="w", pady=(0, 26))
         self.progress_panel = None
         if self.task_progress: self.show_task_progress()
-        getattr(self, "show_" + page)()
+        try: getattr(self, "show_" + page)()
+        except (AppError, OSError) as error:
+            message = str(error) if isinstance(error, AppError) else '无法读取本地文件，请检查目录权限。'
+            self.label(self.main, message, color=BLUE, wraplength=740, justify='left').pack(anchor='w', pady=(12, 6))
+            self.button(self.main, '打开配置文件夹', lambda: open_path(self.paths.config)).pack(anchor='w')
+            self.state_text.set(message)
         self.main.update_idletasks()
         self.resize_content()
         self.canvas.yview_moveto(0)
@@ -182,8 +195,8 @@ class Desktop:
 
     def show_overview(self):
         snapshot = status(self.paths)
-        report = snapshot["report"]
-        counts = report.get("counts", {})
+        report = snapshot["library_report"]
+        counts = report.get('counts', {}) if isinstance(report.get('counts', {}), dict) else {}
         if not snapshot["export_dir"]:
             self.show_first_steps()
         row = tk.Frame(self.main, bg=BG)
@@ -197,11 +210,11 @@ class Desktop:
         panel = tk.Frame(self.main, bg=WHITE, padx=24, pady=24)
         panel.pack(fill="x", pady=20)
         self.label(panel, "订阅工作台", 15, bold=True).pack(anchor="w")
-        self.label(panel, '获取并检测免费节点，自动生成三个客户端的免费订阅。', color=MUTED).pack(anchor='w', pady=(8, 20))
+        self.label(panel, '获取并检测免费节点；需要客户端文件时，请到“订阅导出”生成。', color=MUTED).pack(anchor='w', pady=(8, 20))
         buttons = tk.Frame(panel, bg=WHITE); buttons.pack(anchor="w")
-        self.button(buttons, "获取 GitHub 节点池", lambda: self.prepare_export("refresh-github"), True, True).pack(side="left", padx=(0, 10))
-        self.button(buttons, "重新检测", lambda: self.run("verify"), task=True).pack(side="left", padx=(0, 10))
-        self.button(buttons, "重新导出", lambda: self.run("export"), task=True).pack(side="left")
+        self.button(buttons, "从 GitHub 公开源获取节点", lambda: self.prepare_export("acquire"), True, True).pack(side="left", padx=(0, 10))
+        self.button(buttons, "重新检测", lambda: self.run("verify-library"), task=True).pack(side="left", padx=(0, 10))
+        self.button(buttons, "订阅导出", lambda: self.show("subscriptions")).pack(side="left")
         self.button(panel, '选择 / 添加公开源', lambda: self.show('sources')).pack(anchor='w', pady=(8, 0))
         if snapshot['export_dir']: self.show_downloads(self.main)
         if last_summary := snapshot.get('last_run', {}).get('summary'):
@@ -210,7 +223,9 @@ class Desktop:
         verified = report.get("verified_at")
         detail = "免费节点最近检测：" + (display_time(verified) if verified else "尚未执行连通性检测") + " · " + freshness(report)
         self.label(self.main, detail, color=MUTED).pack(anchor="w", pady=4)
-        self.label(self.main, "导出时间：" + display_time(report.get("exported_at")), color=MUTED).pack(anchor="w", pady=4)
+        self.label(self.main, "导出时间：" + display_time(snapshot["report"].get("exported_at")), color=MUTED).pack(anchor="w", pady=4)
+        if snapshot['export_pending']:
+            self.label(self.main, '节点库有未导出的更新，请到“订阅导出”生成文件。', color=BLUE).pack(anchor='w', pady=4)
         last = snapshot.get("last_run", {})
         if last:
             value = {"success": "完成", "failed": "失败", "cancelled": "已取消", "running": "运行中或上次中断"}.get(last.get("status"), "未知")
@@ -228,23 +243,25 @@ class Desktop:
         except AppError:
             core_text = "1. 在设置中选择客户端，再选择它的检测核心或主程序以自动查找核心。"
         self.label(panel, core_text, color=MUTED, wraplength=700, justify="left").pack(anchor="w", pady=(10, 5))
-        self.label(panel, '2. 获取 GitHub 公开节点池，应用会去重并检测免费节点。', color=MUTED).pack(anchor='w', pady=5)
-        self.label(panel, "3. 生成导出后，打开对应客户端文件夹，按页面说明导入。", color=MUTED).pack(anchor="w", pady=5)
+        self.label(panel, '2. 从 GitHub 公开源获取节点，应用会去重并检测免费节点。', color=MUTED).pack(anchor='w', pady=5)
+        self.label(panel, "3. 到“订阅导出”点击“生成 / 更新导出文件”，再打开对应目录导入。", color=MUTED).pack(anchor="w", pady=5)
         buttons = tk.Frame(panel, bg=WHITE); buttons.pack(anchor="w", pady=(12, 0))
         self.button(buttons, "配置核心和订阅源", lambda: self.show("settings"), True).pack(side="left", padx=(0, 10))
-        self.button(buttons, '获取 GitHub 节点池', lambda: self.prepare_export('refresh-github'), task=True).pack(side='left', padx=(0, 10))
+        self.button(buttons, '从 GitHub 公开源获取节点', lambda: self.prepare_export('acquire'), task=True).pack(side='left', padx=(0, 10))
         self.show_downloads(panel)
 
     def show_sources(self):
         settings = load_settings(self.paths)
         chosen = settings['fetch']['github_sources']
         self.selected_public_sources = set(RECOMMENDED if chosen is None else chosen)
-        cached = read_json(self.paths.data / 'state/public-sources.json', {})
-        states = {s['name']: s for s in cached.get('sources', [])}
+        self.custom_pools = user_pools(settings['fetch'])
+        cached = read_mapping(self.paths.data / 'state/public-sources.json')
+        records = cached.get('sources', [])
+        states = {s['name']: s for s in records if isinstance(s, dict) and isinstance(s.get('name'), str)} if isinstance(records, list) else {}
         row = tk.Frame(self.main, bg=BG); row.pack(fill='x', pady=(0, 10))
         self.source_selection_hint = tk.StringVar()
         tk.Label(row, textvariable=self.source_selection_hint, bg=BG, fg=BLUE).pack(side='left')
-        self.button(row, '保存来源', self.save_public_sources, True, True).pack(side='right')
+        self.button(row, '搜索 GitHub 节点池', self.open_source_search, task=True).pack(side='right', padx=8)
         table = tk.Frame(self.main, bg=WHITE); table.pack(fill='x')
         self.sources_tree = ttk.Treeview(table, columns=('enabled', 'name', 'status', 'nodes', 'eligible', 'verified'), show='headings', height=6)
         for key, title, width in [('enabled', '使用', 65), ('name', '公开仓库', 235), ('status', '上次下载状态', 135), ('nodes', '解析', 55), ('eligible', '送检', 55), ('verified', '可用', 55)]:
@@ -262,26 +279,35 @@ class Desktop:
         for title in PRESETS:
             self.button(buttons, title, lambda title=title: self.choose_source_preset(title), task=True).pack(side='left', padx=(0, 6))
         self.button(buttons, '重试下载连接', self.test_public_sources, task=True).pack(side='left')
-        self.button(self.main, '保存并获取节点池', self.save_and_fetch_public_sources, True, True).pack(anchor='w', before=table, pady=(0, 10))
+        self.button(self.main, '获取节点', self.fetch_public_sources, True, True).pack(anchor='w', before=table, pady=(0, 10))
         self.label(self.main, f'内置 {len(GITHUB_POOLS)} 个来源，不代表 GitHub 总数。快速优先减少等待，均衡兼顾覆盖，全面适合较长时间检测。',
                    color=MUTED, wraplength=740, justify='left').pack(anchor='w', pady=(10, 14))
-        self.label(self.main, '添加其他 GitHub 公开源（每行一个 raw / blob 文件地址）', bold=True).pack(anchor='w', pady=(0, 8))
+        self.label(self.main, '手动添加订阅文件（每行一个 GitHub raw / blob 地址，加入后默认停用）', bold=True).pack(anchor='w', pady=(0, 8))
         self.extra_public_sources_text = tk.Text(self.main, height=3, wrap='word', relief='solid', borderwidth=1,
                                                padx=8, pady=8, font=('Consolas', 10))
         self.extra_public_sources_text.pack(fill='x')
-        self.extra_public_sources_text.insert('1.0', '\n'.join(settings['fetch']['public_sources']))
+        self.button(self.main, '添加文件到节点池', self.add_manual_sources, task=True).pack(anchor='w', pady=(6, 0))
         self.label(self.main, '解析数是来源内容，送检数是本轮实际分配的候选数，可用数需等待协议检测。来源可能重复；重试下载只测试下载，不改变已有导出。',
                    color=MUTED, wraplength=740, justify='left').pack(anchor='w', pady=(8, 0))
         self.source_budget_value = tk.StringVar(value=str(settings['fetch']['max_candidates']))
         self.per_source_budget_value = tk.StringVar(value=str(settings['fetch']['nodes_per_source']))
         budget = tk.Frame(self.main, bg=BG); budget.pack(fill='x', before=table, pady=(0, 10))
         self.label(budget, '单轮送检上限', color=MUTED).pack(side='left', padx=(0, 8))
-        ttk.Entry(budget, textvariable=self.source_budget_value, width=8).pack(side='left')
+        limit_entry = ttk.Entry(budget, textvariable=self.source_budget_value, width=8)
+        limit_entry.pack(side='left'); limit_entry.bind('<FocusOut>', lambda _: self.persist_source_choices())
         self.label(budget, '每源新增名额', color=MUTED).pack(side='left', padx=(14, 8))
-        ttk.Entry(budget, textvariable=self.per_source_budget_value, width=8).pack(side='left')
+        per_source_entry = ttk.Entry(budget, textvariable=self.per_source_budget_value, width=8)
+        per_source_entry.pack(side='left'); per_source_entry.bind('<FocusOut>', lambda _: self.persist_source_choices())
         self.label(self.main, summary_text(cached.get('summary', {})), color=BLUE, wraplength=740, justify='left').pack(anchor='w', pady=(6, 0))
         self.cached_source_states = states
         self.fill_public_sources()
+
+    def open_source_search(self, repository=None):
+        if self.busy: return
+        if self.search_dialog and self.search_dialog.exists():
+            self.search_dialog.window.lift(); return
+        from .source_search_dialog import SourceSearchDialog
+        self.search_dialog = SourceSearchDialog(self, repository)
 
     def fill_public_sources(self):
         selected = self.sources_tree.selection()
@@ -290,25 +316,37 @@ class Desktop:
             state = self.cached_source_states.get(name, {})
             self.sources_tree.insert('', 'end', iid=str(index), values=('✓' if name in self.selected_public_sources else '—', name,
                         state.get('status', '尚未测试'), state.get('nodes', '—'), state.get('eligible', '—'), state.get('verified') if state.get('verified') is not None else '未检测'))
-        for name, state in self.cached_source_states.items():
-            if ' · 自选 ' in name:
-                self.sources_tree.insert('', 'end', iid='extra-' + str(len(self.sources_tree.get_children())),
-                    values=('✓', name, state.get('status', '尚未测试'), state.get('nodes', '—'), state.get('eligible', '—'),
-                            state.get('verified') if state.get('verified') is not None else '未检测'))
+        self.custom_source_states = {}
+        for index, pool in enumerate(self.custom_pools):
+            records = [state for name, state in self.cached_source_states.items() if name.startswith(pool['name'] + ' · 自选 ')]
+            state = dict(records[0]) if len(records) == 1 else {}
+            if len(records) > 1:
+                state.update(status='多个订阅文件，见解析与检测统计',
+                             nodes=sum(nonnegative(r.get('nodes')) for r in records),
+                             eligible=sum(nonnegative(r.get('eligible')) for r in records),
+                             verified=sum(nonnegative(r.get('verified')) for r in records) if all(r.get('verified') is not None for r in records) else None)
+            self.custom_source_states[pool['name']] = state
+            self.sources_tree.insert('', 'end', iid='pool-' + str(index), values=(
+                '✓' if pool['enabled'] else '—', pool['name'], state.get('status', '尚未测试' if pool['urls'] else '待选择订阅文件'),
+                state.get('nodes', '—'), state.get('eligible', '—'), state.get('verified') if state.get('verified') is not None else '未检测'))
         selected = [item for item in selected if self.sources_tree.exists(item)]
         if selected: self.sources_tree.selection_set(selected)
-        self.source_selection_hint.set(f'启用 {len(self.selected_public_sources)} / {len(GITHUB_POOLS)} 个内置公开源')
+        enabled = len(self.selected_public_sources) + sum(pool['enabled'] for pool in self.custom_pools)
+        self.source_selection_hint.set(f'启用 {enabled} / {len(GITHUB_POOLS) + len(self.custom_pools)} 个节点池')
 
     def describe_public_source(self):
         selected = self.sources_tree.selection()
         if not selected: return
         name = self.sources_tree.item(selected[0], 'values')[1]
-        state = self.cached_source_states.get(name, {})
+        state = self.cached_source_states.get(name, self.custom_source_states.get(name, {}))
         text = 'https://github.com/' + name.split(' · ')[0] + ' · ' + source_note(name)
         if state.get('unique') is not None: text += f"\n去重 {state['unique']} · 独有 {state.get('exclusive', 0)} · 送检 {state.get('eligible', 0)}"
         if state.get('last_verified_at'): text += ' · 最近协议检测：' + display_time(state['last_verified_at'])
         if name in LARGE_POOLS: text += ' · 大型来源，检测时间较长'
         if state.get('route'): text += ' · ' + state['route']
+        if selected[0].startswith('pool-'):
+            pool = self.custom_pools[int(selected[0][5:])]
+            text += f" · 自选节点池，已选择 {len(pool['urls'])} 个订阅文件"
         text += '\n最近下载成功：' + display_time(state.get('last_success')) + f" · 连续失败 {state.get('failures', 0)} 次"
         if state.get('next_retry'): text += ' · 下次重试：' + display_time(state['next_retry'])
         attempts = state.get('attempts', [])
@@ -319,22 +357,30 @@ class Desktop:
 
     def toggle_public_source(self):
         if self.busy or not self.sources_tree.selection(): return
-        if self.sources_tree.selection()[0].startswith('extra-'): return
-        name, _ = GITHUB_POOLS[int(self.sources_tree.selection()[0])]
-        if name in self.selected_public_sources: self.selected_public_sources.remove(name)
-        else: self.selected_public_sources.add(name)
-        self.fill_public_sources()
+        selected = self.sources_tree.selection()[0]
+        if selected.startswith('pool-'):
+            pool = self.custom_pools[int(selected[5:])]
+            if not pool['enabled'] and not pool['urls']:
+                self.state_text.set('请先选择订阅文件；添加后再回来手动启用。')
+                self.open_source_search(pool)
+                return
+            pool['enabled'] = not pool['enabled']
+        else:
+            name, _ = GITHUB_POOLS[int(selected)]
+            if name in self.selected_public_sources: self.selected_public_sources.remove(name)
+            else: self.selected_public_sources.add(name)
+        self.persist_source_choices()
 
     def choose_public_sources(self, names):
         if self.busy: return
-        self.selected_public_sources = set(names); self.fill_public_sources()
+        self.selected_public_sources = set(names)
+        self.persist_source_choices()
 
     def choose_source_preset(self, title):
         if self.busy: return
         names, limit, per_source = PRESETS[title]
         self.source_budget_value.set(str(limit)); self.per_source_budget_value.set(str(per_source))
         self.choose_public_sources(names)
-        self.state_text.set(f'{title}：已调整来源及名额，保存后生效。')
 
     def public_source_settings(self):
         settings = deepcopy(load_settings(self.paths))
@@ -344,34 +390,66 @@ class Desktop:
         except ValueError: raise AppError('送检上限请输入 1–10000，每源名额请输入 1–2000。') from None
         settings['fetch'].update(max_candidates=limit, nodes_per_source=per_source)
         settings['fetch']['github_sources'] = [name for name, _ in GITHUB_POOLS if name in self.selected_public_sources]
-        settings['fetch']['public_sources'] = list(dict.fromkeys(github_file_url(line) for line in
-                          self.extra_public_sources_text.get('1.0', 'end').splitlines() if line.strip()))
-        if not settings['fetch']['github_sources'] and not settings['fetch']['public_sources']:
-            raise AppError('请至少启用一个公开源，或添加一个其他公开 GitHub 文件地址。')
+        settings['fetch']['node_pools'] = validate_pools(self.custom_pools)
+        settings['fetch']['public_sources'] = []
         return settings
 
-    def save_public_sources(self):
-        if self.busy: return
+    def persist_source_choices(self):
+        if self.busy or self.page != 'sources': return False
         try:
             write_yaml(self.paths.config / 'settings.yaml', self.public_source_settings())
-            self.state_text.set('公开来源已保存，下一次获取时使用这些来源。')
-        except AppError as error: messagebox.showerror('来源未保存', str(error), parent=self.root)
+            self.fill_public_sources()
+            self.state_text.set('来源选择已自动记住。获取节点只更新节点库，导出请到“订阅导出”。')
+            return True
+        except (AppError, OSError) as error:
+            settings = load_settings(self.paths)
+            chosen = settings['fetch']['github_sources']
+            self.selected_public_sources = set(RECOMMENDED if chosen is None else chosen)
+            self.custom_pools = user_pools(settings['fetch'])
+            self.fill_public_sources()
+            self.state_text.set(str(error) if isinstance(error, AppError) else '无法记住来源选择，请检查配置目录权限。')
+            return False
+
+    def add_catalog_repository(self, repository, urls=()):
+        if repository['name'].casefold() in {name.casefold() for name, _ in GITHUB_POOLS}:
+            message = '该节点池已在内置列表中，沿用内置订阅文件；启用状态保持不变。'
+            self.state_text.set(message)
+            return message
+        settings = load_settings(self.paths)
+        pools, added = add_pool(settings['fetch'], repository, urls)
+        settings['fetch'].update(node_pools=pools, public_sources=[])
+        write_yaml(self.paths.config / 'settings.yaml', settings)
+        self.custom_pools = pools
+        self.fill_public_sources()
+        message = ('已加入 NodeHarbor 节点池，默认停用。选择订阅文件后，请到列表手动启用。' if added else
+                   '该节点池已在列表中，已记住所选文件；启用状态保持不变。')
+        self.state_text.set(message)
+        return message
+
+    def add_manual_sources(self):
+        if self.busy: return
+        urls = list(dict.fromkeys(github_file_url(line) for line in self.extra_public_sources_text.get('1.0', 'end').splitlines() if line.strip()))
+        if not urls: raise AppError('请先填写 GitHub 公开订阅文件地址。')
+        settings = load_settings(self.paths)
+        for url in urls:
+            pools, _ = add_pool(settings['fetch'], {'name': repository_of(url)}, [url])
+            settings['fetch'].update(node_pools=pools, public_sources=[])
+        write_yaml(self.paths.config / 'settings.yaml', settings)
+        self.custom_pools = user_pools(settings['fetch'])
+        self.extra_public_sources_text.delete('1.0', 'end')
+        self.fill_public_sources()
+        self.state_text.set('订阅文件已记住；新加入的节点池默认停用，请手动启用。')
 
     def test_public_sources(self):
-        if self.busy: return
-        try: settings = self.public_source_settings()
-        except AppError as error:
-            messagebox.showerror('无法测试', str(error), parent=self.root); return
+        if self.busy or not self.persist_source_choices(): return
+        settings = self.public_source_settings()
         settings['fetch'].update(_cache_folder=str(self.paths.data / 'source-cache'), _force=True)
         self.start_task('test-sources', lambda control: fetch_all(settings,
                         lambda line: self.events.put(('log', line)), control, public_only=True), refresh=False)
 
-    def save_and_fetch_public_sources(self):
-        if self.busy: return
-        try: write_yaml(self.paths.config / 'settings.yaml', self.public_source_settings())
-        except AppError as error:
-            messagebox.showerror('无法获取', str(error), parent=self.root); return
-        self.prepare_export('refresh-github')
+    def fetch_public_sources(self):
+        if self.busy or not self.persist_source_choices(): return
+        self.prepare_export('acquire')
 
     def show_downloads(self, parent):
         self.label(parent, '官方下载', 13, bold=True).pack(anchor='w', pady=(6, 10))
@@ -408,18 +486,19 @@ class Desktop:
     def fill_nodes(self, reload=True):
         if reload or not hasattr(self, 'cached_nodes'):
             try:
-                current = self.paths.current()
-                self.cached_nodes = read_yaml(current / 'free-nodes.yaml', {}).get('proxies', [])
-                self.cached_node_report = read_json(current / 'report.json', {})
+                self.cached_nodes, self.cached_node_report = read_library(self.paths)
                 self.node_hint.set('最近检测：' + display_time(self.cached_node_report.get('verified_at')) + ' · ' + freshness(self.cached_node_report) + '。延迟不是速度，地区标签未经验证。')
             except (AppError, OSError):
                 self.cached_nodes, self.cached_node_report = [], {}
-                self.node_hint.set('尚无可用导出，请先获取 GitHub 节点池。')
+                self.node_hint.set('尚无免费节点，请先从 GitHub 公开源获取节点。')
         nodes, report = self.cached_nodes, self.cached_node_report
-        delays = report.get('verification', {}).get('delays_ms', {})
-        results = report.get('verification', {}).get('quality', {})
-        origins = report.get('node_sources', {})
-        key = lambda n: (delays.get(identity(n), float('inf')), n['name'])
+        verification = report.get('verification', {})
+        verification = verification if isinstance(verification, dict) else {}
+        delays, results, origins = verification.get('delays_ms', {}), verification.get('quality', {}), report.get('node_sources', {})
+        delays = delays if isinstance(delays, dict) else {}
+        results = {k: v for k, v in results.items() if isinstance(v, dict)} if isinstance(results, dict) else {}
+        origins = {k: [s for s in v if isinstance(s, str)] for k, v in origins.items() if isinstance(v, list)} if isinstance(origins, dict) else {}
+        key = lambda n: (nonnegative(delays.get(identity(n)), float('inf')), n['name'])
         if self.sort_nodes.get() == '名称': key = lambda n: n['name'].casefold()
         elif self.sort_nodes.get() == '来源': key = lambda n: ' / '.join(origins.get(identity(n), []))
         nodes = sorted(nodes, key=key)
@@ -443,14 +522,18 @@ class Desktop:
         row = tk.Frame(first, bg=WHITE); row.pack(anchor='w', pady=(14, 12))
         self.export_action_buttons = []
         for title, command, primary in [
-            ('获取 GitHub 节点池', lambda: self.prepare_export('refresh-github'), False),
+            ('从 GitHub 公开源获取节点', lambda: self.prepare_export('acquire'), False),
             ('生成 / 更新导出文件', lambda: self.prepare_export('export'), True),
         ]:
             button = self.button(row, title, command, primary=primary, task=True)
             button.pack(side='left', padx=(0, 8))
             self.export_action_buttons.append(button)
-        self.label(first, '获取节点池会下载、检测并生成文件；生成 / 更新导出文件使用现有节点，不重新下载或测速。',
+        self.label(first, '获取节点只下载、检测并更新节点库；点击“生成 / 更新导出文件”才会更新三个客户端的文件。',
                    color=MUTED, wraplength=760, justify='left').pack(anchor='w')
+        snapshot = status(self.paths)
+        self.label(first, f"节点库：{snapshot['library_count']} 个节点 · " +
+                   ('有更新待导出' if snapshot['export_pending'] else '生成文件后可导入客户端'),
+                   color=BLUE).pack(anchor='w', pady=(8, 0))
         try:
             settings = load_settings(self.paths)
             find_core(self.paths, settings)
@@ -459,7 +542,7 @@ class Desktop:
             core_hint = '获取或检测前请配置核心；已有节点可执行结构校验导出。'
         self.label(first, core_hint, color=MUTED, wraplength=760, justify='left').pack(anchor='w', pady=(6, 0))
         try:
-            report = read_json(self.paths.current() / 'report.json', {})
+            report = read_mapping(self.paths.current() / 'report.json')
         except AppError: report = {}
         self.label(self.main, '导出结果 · ' + ('上次生成 ' + display_time(report.get('exported_at')) if report else '尚未生成'),
                    color=MUTED).pack(anchor='w', pady=(4, 12))
@@ -512,9 +595,8 @@ class Desktop:
         try:
             if action != 'export': find_core(self.paths, load_settings(self.paths))
             if action == 'export':
-                try: self.paths.current()
-                except AppError:
-                    raise AppError('还没有免费节点，请先点击“获取 GitHub 节点池”。')
+                nodes, _ = read_library(self.paths)
+                if not nodes: raise AppError('还没有免费节点，请先点击“从 GitHub 公开源获取节点”。')
         except AppError as exc:
             messagebox.showinfo('准备导出', str(exc), parent=self.root)
             if '核心' in str(exc) or 'Mihomo' in str(exc): self.show('settings')
@@ -571,7 +653,7 @@ class Desktop:
         self.label(panel, "本地订阅端口", bold=True).pack(anchor="w", pady=(0, 8))
         self.port_value = tk.StringVar(value=str(settings["subscription"]["port"]))
         ttk.Entry(panel, textvariable=self.port_value, width=15).pack(anchor="w")
-        chosen_count = len(selected_pools(settings['fetch'])) + len(settings['fetch']['public_sources'])
+        chosen_count = len(selected_pools(settings['fetch'])) + len(enabled_urls(settings['fetch']))
         self.label(panel, f'当前选择 {chosen_count} 个公开来源；获取后去重和检测。可在“公开源”页选择或添加，打开应用不会自动联网。',
                    color=MUTED, wraplength=700, justify='left').pack(anchor='w')
         self.button(panel, '管理 GitHub 公开源', lambda: self.show('sources')).pack(anchor='w', pady=(6, 0))
@@ -723,8 +805,8 @@ class Desktop:
             self.show_task_progress()
         def worker():
             try:
-                operation(self.control)
-                self.events.put(("done", "任务完成"))
+                result = operation(self.control)
+                self.events.put(("done", result if isinstance(result, str) else "任务完成"))
             except Cancelled as exc:
                 self.events.put(("cancelled", str(exc)))
             except Exception as exc:
@@ -743,6 +825,8 @@ class Desktop:
                  font=('Microsoft YaHei UI', 12, 'bold')).pack(side='left')
         self.progress_elapsed = tk.StringVar()
         tk.Label(row, textvariable=self.progress_elapsed, bg=WHITE, fg=MUTED).pack(side='right')
+        self.progress_cancel_button = self.button(self.progress_panel, '取消当前任务', self.cancel_task)
+        self.progress_cancel_button.pack(anchor='e', pady=(6, 0))
         self.progress_steps = tk.StringVar()
         tk.Label(self.progress_panel, textvariable=self.progress_steps, bg=WHITE, fg=MUTED,
                  anchor='w', wraplength=660, justify='left').pack(fill='x', pady=(8, 5))
@@ -766,6 +850,10 @@ class Desktop:
         model = self.task_progress
         if not model or not self.progress_panel or not self.progress_panel.winfo_exists(): return
         state = {'running': '进行中', 'success': '完成', 'failed': '未完成', 'cancelled': '已取消'}[model.status]
+        cancelling = self.busy and self.control and self.control.event.is_set()
+        if cancelling: state = '正在取消'
+        self.progress_cancel_button.config(state='normal' if self.busy and not cancelling else 'disabled',
+                                           text='正在取消…' if cancelling else '取消当前任务')
         self.progress_title.set(TASKS.get(model.action, model.action) + ' · ' + state)
         self.progress_elapsed.set(f'已用时 {model.elapsed // 60:02}:{model.elapsed % 60:02}')
         labels = []
@@ -795,10 +883,15 @@ class Desktop:
                     if model.status == 'running' else
                     '三个客户端的文件已自动导出；到“订阅导出”查看检测时间和校验状态，再打开对应目录导入。'
                     if model.status == 'success' and model.action not in {'check-core', 'test-sources'} else
-                    '公开源下载测试完成；尚未检测节点连通性。请保存来源，再获取节点池。' if model.status == 'success' and model.action == 'test-sources' else
-                    '核心检查通过。请保存设置，再获取节点池。' if model.status == 'success' else
+                    '公开源下载测试完成；尚未检测节点连通性。请启用需要的节点池，再获取节点。' if model.status == 'success' and model.action == 'test-sources' else
+                    '核心检查通过。请保存设置，再获取节点。' if model.status == 'success' else
                     '核心相关问题请到设置检查客户端与核心；下载问题请查看各源状态和下载代理。已有订阅未被失败任务替换。')
         if model.acquisition: guidance = summary_text(model.acquisition) + '\n' + guidance
+        if model.action == 'search-sources':
+            self.progress_counts.set('')
+            guidance = '搜索只查找公开仓库与候选文件。加入节点池后默认停用；选择文件并手动启用后，才能获取节点。'
+        if model.action in {'acquire', 'verify-library'} and model.status == 'success':
+            guidance = '节点库已更新，客户端导出尚未改变。请到“订阅导出”点击“生成 / 更新导出文件”。'
         self.progress_guidance.set(guidance)
 
     def cancel_task(self):
@@ -819,6 +912,9 @@ class Desktop:
                             self.cached_source_states = {source['name']: source for source in message.get('sources', [])}
                             sources_changed = True
                     self.state_text.set(message.get('message', '') + (f" · {message['completed']}/{message['total']}" if message.get('total') else ''))
+                elif kind == 'discovery':
+                    dialog, result = message
+                    if dialog.exists(): dialog.receive(result)
                 elif kind == "log" and self.page == "logs":
                     self.state_text.set(message)
                     self.log_widget.config(state="normal"); self.log_widget.insert("end", message + "\n")
@@ -829,6 +925,8 @@ class Desktop:
                     self.busy = False
                     self.control = None
                     self.cancel_button.config(state="disabled")
+                    if self.search_dialog and self.search_dialog.exists() and kind != 'done':
+                        self.search_dialog.note.set(message)
                     if self.closing:
                         self.close(); return
                     if self.refresh_after_task: self.show(self.page)
@@ -838,6 +936,7 @@ class Desktop:
         except queue.Empty: pass
         if sources_changed and self.page == 'sources': self.fill_public_sources()
         self.render_task_progress()
+        if self.search_dialog and self.search_dialog.exists(): self.search_dialog.update_busy()
         self.poll_id = self.root.after(100, self.poll)
 
     def copy(self, value):

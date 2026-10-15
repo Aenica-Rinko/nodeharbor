@@ -1,10 +1,12 @@
 """Transient task state for rendering truthful stage progress on the Tk thread."""
 import time
 
-STAGES = {'core': '检查核心', 'download': '下载 / 解析', 'precheck': '连通性预检',
+STAGES = {'search': '搜索仓库 / 查找文件', 'core': '检查核心', 'download': '下载 / 解析', 'precheck': '连通性预检',
           'protocol': 'HTTP / HTTPS 检测', 'export': '生成导出'}
-TASKS = {'refresh-github': '获取 GitHub 节点池', 'refresh': '更新节点', 'verify': '重新检测',
-         'export': '生成订阅文件', 'check-core': '检查核心', 'test-sources': '测试公开源下载'}
+TASKS = {'refresh-github': '从 GitHub 公开源获取节点', 'refresh': '更新节点', 'verify': '重新检测',
+         'acquire': '从 GitHub 公开源获取节点', 'verify-library': '重新检测节点库',
+         'export': '生成订阅文件', 'check-core': '检查核心', 'test-sources': '测试公开源下载',
+         'search-sources': '搜索 GitHub 节点池'}
 
 
 class TaskProgress:
@@ -13,11 +15,13 @@ class TaskProgress:
         self.started = time.monotonic()
         self.ended = None
         self.status = 'running'
-        self.stage = 'download' if action == 'test-sources' else 'export' if action == 'export' else 'core'
+        self.stage = 'search' if action == 'search-sources' else 'download' if action == 'test-sources' else 'export' if action == 'export' else 'core'
         self.message = '正在准备任务'
         self.acquisition = {}
-        self.steps = {key: {} for key in (['download'] if action == 'test-sources' else
+        self.steps = {key: {} for key in (['search'] if action == 'search-sources' else ['download'] if action == 'test-sources' else
                       ['export'] if action == 'export' else ['core'] if action == 'check-core' else
+                      ['core', 'download', 'precheck', 'protocol'] if action == 'acquire' else
+                      ['core', 'precheck', 'protocol'] if action == 'verify-library' else
                       ['core', 'precheck', 'protocol', 'export'] if action == 'verify' else
                       ['core', 'download', 'precheck', 'protocol', 'export'])}
 
@@ -27,7 +31,7 @@ class TaskProgress:
         if stage != self.stage and self.steps.get(self.stage): self.steps[self.stage]['finished'] = True
         self.stage = stage
         self.message = event.get('message', '')
-        self.steps[stage] = dict(event)
+        self.steps[stage] = dict(self.steps.get(stage, {}), **event)
         if event.get('summary'): self.acquisition = dict(event['summary'])
         if event.get('sources') and stage != 'download' and self.steps.get('download'):
             self.steps['download']['sources'] = event['sources']

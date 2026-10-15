@@ -15,7 +15,8 @@ from .public_sources import GITHUB_POOLS, public_fallbacks, selected_pools, sour
 from .download_network import primary_proxies, local_proxy_candidates, proxy_label, error_code, DownloadFailed
 from .storage import AppError, read_json, write_json, file_lock
 from .tasks import Cancelled, TaskControl, network_job, parallel_map, NetworkFailure, DeadlineExceeded, NetworkPool
-from .source_plan import source_key, priority, read_mapping, fair_candidates
+from .source_plan import source_key, priority, read_mapping, fair_candidates, nonnegative
+from . import __version__
 
 
 class SourcesUnavailable(AppError):
@@ -33,13 +34,14 @@ def load_cache(url, options):
     cache_file = Path(options['_cache_folder']) / (source_key(url) + '.json')
     cached = read_mapping(cache_file)
     if (not isinstance(cached.get('result'), dict) or not isinstance(cached['result'].get('nodes'), list)
-            or type(cached.get('saved_at')) not in (int, float)): return {}
+            or nonnegative(cached.get('saved_at'), None) is None): return {}
     cached['result']['nodes'] = normalize_nodes(cached['result']['nodes'])
     return cached if cached['result']['nodes'] else {}
 
 
 def cached_result(cached, stale=False):
-    return dict(cached['result'], channel='旧缓存（将重新检测）' if stale else '本地缓存', attempts=[],
+    return dict(cached['result'], route=cached['result'].get('route', '历史通道未记录'),
+                channel='旧缓存（将重新检测）' if stale else '本地缓存', attempts=[],
                 cached=True, stale=stale, fetched_at=cached['saved_at'])
 
 
@@ -64,8 +66,8 @@ def api_gate(url, options):
             if time.monotonic() >= deadline: raise requests.Timeout('API queue timeout') from None
             time.sleep(.1)
     try:
-        state = read_json(folder / 'github-api-wait.json', {})
-        remaining = state.get('until', 0) - time.time()
+        state = read_mapping(folder / 'github-api-wait.json')
+        remaining = nonnegative(state.get('until')) - time.time()
         if remaining > 0:
             response = requests.Response(); response.status_code = 429
             response.headers['Retry-After'] = str(max(1, int(remaining)))
@@ -151,7 +153,7 @@ def download_single(url, options, retries=None, proxies=None):
         session.mount("http://", HTTPAdapter(max_retries=retry))
         # Honor download proxies without enabling .netrc credentials via trust_env.
         session.proxies = primary_proxies(url, options) if proxies is None else proxies
-        headers = {"User-Agent": "clash.meta NodeHarbor/1.3"}
+        headers = {"User-Agent": f"clash.meta NodeHarbor/{__version__}"}
         cached = options.get('_conditional', {})
         if cached.get('etag'): headers['If-None-Match'] = cached['etag']
         elif cached.get('modified'): headers['If-Modified-Since'] = cached['modified']
@@ -191,7 +193,8 @@ def fetch_all(settings, log, control=None, public_only=False):
     control = control or TaskControl()
     options = settings['fetch']
     pools = {url: name for name, url in selected_pools(options)}
-    for index, url in enumerate(options.get('public_sources', []), 1):
+    from .source_catalog import enabled_urls
+    for index, url in enumerate(enabled_urls(options), 1):
         from urllib.parse import urlsplit
         owner, repository, *_ = urlsplit(url).path.strip('/').split('/')
         pools.setdefault(url, owner + '/' + repository + f' · 自选 {index}')
@@ -203,6 +206,10 @@ def fetch_all(settings, log, control=None, public_only=False):
     for url in urls:
         previous = health.get(source_key(url), {})
         if not isinstance(previous, dict): previous = {}
+        previous = dict(previous)
+        for key in ('failures', 'next_retry', 'last_success', 'last_verified_at', 'last_eligible', 'last_verified', 'elapsed_seconds'):
+            if key in previous: previous[key] = nonnegative(previous[key])
+        previous['failures'] = int(previous.get('failures', 0))
         source_states.append(dict(previous, key=source_key(url), name=pools[url], status='等待下载',
                                   nodes=0, verified=None, eligible=0, tested=None, node_ids=[], attempts=[],
                                   cached=False, stale=False, deferred=False))

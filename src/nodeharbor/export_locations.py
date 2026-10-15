@@ -1,5 +1,5 @@
 """Client folders and local export relocation; source data is never removed."""
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from copy import deepcopy
 from pathlib import Path
 import re
@@ -116,7 +116,9 @@ def relocate_exports(paths, directory, settings=None):
     source = paths.exports
     target = destination if destination == paths.data / 'exports' else destination / '.history'
     if linked(destination) or linked(target): raise AppError('导出目录不能是符号链接或目录联接。')
-    with app_lock(paths), file_lock(target / 'exports.lock'):
+    with app_lock(paths), ExitStack() as locks:
+        for lock in sorted({source.resolve() / 'exports.lock', target.resolve() / 'exports.lock'}, key=str):
+            locks.enter_context(file_lock(lock))
         copied = 0
         if source.resolve() != target.resolve() and source.is_dir():
             for folder in source.iterdir():

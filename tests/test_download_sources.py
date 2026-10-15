@@ -94,7 +94,7 @@ def test_extra_public_source_is_included_in_public_only_fetch(monkeypatch):
     assert len(calls) == 1 and calls[0][1]['_public_source'] is True
 
 
-def test_public_catalog_page_saves_selection_and_extra_urls(tmp_path, monkeypatch):
+def test_public_catalog_page_remembers_selection_and_adds_disabled_urls(tmp_path, monkeypatch):
     import tkinter as tk
     from nodeharbor.desktop import Desktop
     try: root = tk.Tk()
@@ -107,12 +107,14 @@ def test_public_catalog_page_saves_selection_and_extra_urls(tmp_path, monkeypatc
         assert len(app.sources_tree.get_children()) == len(GITHUB_POOLS) and len(app.selected_public_sources) == len(RECOMMENDED)
         app.choose_public_sources([GITHUB_POOLS[3][0]])
         app.extra_public_sources_text.insert('1.0', 'https://github.com/example/public/blob/main/sub.txt')
-        app.save_public_sources()
+        app.add_manual_sources()
         settings = load_settings(paths)
         assert settings['fetch']['github_sources'] == [GITHUB_POOLS[3][0]]
-        assert settings['fetch']['public_sources'] == ['https://raw.githubusercontent.com/example/public/main/sub.txt']
+        assert settings['fetch']['public_sources'] == []
+        assert settings['fetch']['node_pools'][0]['urls'] == ['https://raw.githubusercontent.com/example/public/main/sub.txt']
+        assert settings['fetch']['node_pools'][0]['enabled'] is False
         before = (paths.config / 'settings.yaml').read_bytes()
         app.extra_public_sources_text.insert('end', '\nhttps://example.com/private?token=secret')
-        app.save_public_sources()
-        assert errors and (paths.config / 'settings.yaml').read_bytes() == before and not callbacks
+        with pytest.raises(AppError): app.add_manual_sources()
+        assert not errors and (paths.config / 'settings.yaml').read_bytes() == before and not callbacks
     finally: app.close()

@@ -16,7 +16,7 @@ DEFAULTS = {
               "proxy": "", "github_mirror": "", "use_history": True,
               "max_response_mb": 16, "cache_minutes": 10, 'stale_cache_hours': 24,
               'max_candidates': 1200, 'nodes_per_source': 200,
-              "github_sources": None, "public_sources": [], "auto_local_proxy": True},
+              "github_sources": None, "public_sources": [], "node_pools": [], "auto_local_proxy": True},
     "verification": {"mihomo_path": "", "workers": 24, "batch_size": 200,
                      "core_client": "Mihomo", "core_paths": {"Mihomo": "", "Clash-Verge-Rev": "", "v2rayN": ""},
                      "v2rayn_core": "xray",
@@ -37,9 +37,9 @@ def load_settings(paths):
         if isinstance(out.get(key), dict) and isinstance(value, dict): out[key].update(value)
         else: out[key] = value
     out.pop('upload', None)
-    for key in ('sources', 'github_public_pool'): out['fetch'].pop(key, None)
     for section in ("fetch", "verification", "subscription", "task", "exports"):
         if not isinstance(out.get(section), dict): raise AppError(f"配置项 {section} 必须是对象。")
+    for key in ('sources', 'github_public_pool'): out['fetch'].pop(key, None)
     for section, key in (("fetch", "use_history"), ('fetch', 'auto_local_proxy')):
         if type(out[section].get(key)) is not bool:
             raise AppError(f"{section}.{key} 必须是布尔值 true/false，不能加引号。")
@@ -71,6 +71,9 @@ def load_settings(paths):
         if not isinstance(value, int) or isinstance(value, bool) or not low <= value <= high:
             raise AppError(f"{section}.{key} 必须是 {low}–{high} 的整数。")
     from urllib.parse import urlsplit
+    # Mihomo's delay endpoint parses a signed 16-bit millisecond timeout.
+    if core_kind(out) == 'mihomo' and verification['timeout_ms'] > 32767:
+        raise AppError('verification.timeout_ms：Mihomo 接口最多支持 32767 毫秒，请减小检测超时。')
     for key, scheme in [('test_url', 'http'), ('https_test_url', 'https')]:
         value = verification.get(key)
         try:
@@ -85,6 +88,8 @@ def load_settings(paths):
     extra = out['fetch']['public_sources']
     if not isinstance(extra, list) or any(not isinstance(url, str) for url in extra): raise AppError('额外公开源必须是 GitHub 地址列表。')
     out['fetch']['public_sources'] = list(dict.fromkeys(github_file_url(url) for url in extra))
+    from .source_catalog import validate_pools
+    out['fetch']['node_pools'] = validate_pools(out['fetch']['node_pools'])
     from .storage import export_root
     export_root(paths.root, out['exports']['directory'])
     return out

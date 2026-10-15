@@ -37,7 +37,7 @@ def prepared(paths, client):
     if not count:
         if report.get('counts', {}).get('free', 0) and client == 'v2rayN':
             raise AppError('这些节点暂不能转换为 v2rayN 链接。请查看跳过原因，或选择 Mihomo / Clash-Verge-Rev。')
-        raise AppError('尚无免费节点，请先获取 GitHub 节点池。')
+        raise AppError('尚无免费节点，请先从 GitHub 公开源获取节点。')
     return file, report, count
 
 

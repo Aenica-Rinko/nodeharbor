@@ -50,23 +50,30 @@ class TaskControl:
     def communicate(self, process, payload=None, timeout=30):
         """Drain both pipes; stop only the process owned by this call on every exit."""
         deadline = time.monotonic() + timeout
+        replies = queue.Queue()
+        def io():
+            try: replies.put((True, process.communicate(input=payload)))
+            except BaseException as error: replies.put((False, error))
+        reader = threading.Thread(target=io, name='nodeharbor-process-io', daemon=True)
+        reader.start()
         try:
             while True:
                 self.check()
                 remaining = deadline - time.monotonic()
                 if remaining <= 0: raise DeadlineExceeded("当前步骤超过时限。")
                 try:
-                    result = process.communicate(input=payload, timeout=min(0.1, remaining))
+                    ok, result = replies.get(timeout=min(0.1, remaining))
                     self.check()
+                    if not ok: raise result
                     return result
-                except subprocess.TimeoutExpired:
-                    payload = None
+                except queue.Empty: pass
         finally:
             if process.poll() is None:
                 process.terminate()
                 try: process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
                     process.kill(); process.wait(timeout=2)
+            reader.join(2)
             for stream in (process.stdin, process.stdout, process.stderr):
                 if stream: stream.close()
 
@@ -145,12 +152,25 @@ class NetworkPool:
             self.control.check()
             try: slot = self.slots.get(timeout=0.1); break
             except queue.Empty: pass
+        writer = None
         try:
             if self.workers[slot] is None: self.workers[slot] = self._start()
             process, replies, _ = self.workers[slot]
             deadline = time.monotonic() + timeout
-            process.stdin.write(json.dumps({'operation': operation, 'payload': payload}).encode() + b'\n')
-            process.stdin.flush()
+            sent, send_errors = threading.Event(), []
+            def send():
+                try:
+                    process.stdin.write(json.dumps({'operation': operation, 'payload': payload}).encode() + b'\n')
+                    process.stdin.flush()
+                except Exception as error: send_errors.append(error)
+                finally: sent.set()
+            writer = threading.Thread(target=send, name='nodeharbor-pipe-writer', daemon=True)
+            writer.start()
+            while not sent.wait(.1):
+                self.control.check()
+                if time.monotonic() >= deadline: raise DeadlineExceeded('向网络工作进程发送请求超过时限。')
+            self.control.check()
+            if send_errors: raise AppError('网络工作进程无法接收请求。') from None
             while True:
                 self.control.check()
                 if time.monotonic() >= deadline: raise DeadlineExceeded('节点检测超过时限。')
@@ -158,20 +178,27 @@ class NetworkPool:
                 except queue.Empty: pass
                 else:
                     if line is None: raise AppError('网络工作进程提前退出。')
-                    result = json.loads(line)
+                    try: result = json.loads(line)
+                    except (ValueError, TypeError): raise AppError('网络工作进程返回无效数据。') from None
+                    if not isinstance(result, dict): raise AppError('网络工作进程返回无效数据。')
                     if 'event' in result:
                         if on_progress: on_progress(result['event'])
                         continue
                     break
+            if 'ok' not in result: raise AppError('网络工作进程返回无效数据。')
             if not result['ok']:
                 code = result.get('error_code', 'network')
                 raise NetworkFailure(code if code in NETWORK_ERRORS else 'network', result.get('attempts', []))
+            if 'result' not in result: raise AppError('网络工作进程返回无效数据。')
+            self.control.check()
             return result['result']
         except NetworkFailure: raise
         except BaseException:
             self._stop(self.workers[slot]); self.workers[slot] = None
             raise
-        finally: self.slots.put(slot)
+        finally:
+            if writer: writer.join(2)
+            self.slots.put(slot)
 
     def __exit__(self, *args):
         for worker in self.workers: self._stop(worker)

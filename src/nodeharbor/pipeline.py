@@ -12,9 +12,10 @@ from .fetcher import fetch_all, SourcesUnavailable
 from .nodes import normalize_nodes
 from .storage import AppError, app_lock, read_json, read_yaml, write_json
 from .nodes import identity
-from .source_plan import fair_candidates, verification_sources, persist_sources, summary_text
+from .source_plan import fair_candidates, verification_sources, persist_sources, summary_text, read_mapping
 from .verifier import verify_nodes
 from .tasks import Cancelled, TaskControl
+from .node_library import read_library, save_library
 
 
 def logger_for(paths, callback=None):
@@ -32,11 +33,16 @@ def logger_for(paths, callback=None):
 
 
 def status(paths):
-    result = {"root": str(paths.root), "last_run": read_json(paths.data / "state" / "last-run.json", {})}
+    result = {"root": str(paths.root), "last_run": read_mapping(paths.data / "state" / "last-run.json")}
     try:
         folder = paths.current()
-        result.update(report=read_json(folder / "report.json", {}), export_dir=str(folder))
+        result.update(report=read_mapping(folder / "report.json"), export_dir=str(folder))
     except AppError: result.update(report={}, export_dir=None)
+    nodes, library_report = read_library(paths)
+    result['library_report'] = library_report
+    result['library_count'] = len(nodes)
+    result['export_pending'] = bool(library_report.get('library_id') and
+                                    library_report['library_id'] != result['report'].get('library_id'))
     return result
 
 
@@ -51,7 +57,7 @@ def execute(paths, action="refresh-github", callback=None, control=None):
             settings = load_settings(paths)
             control.limit(settings["task"]["timeout_seconds"])
             control.check()
-            if action in {'refresh', 'refresh-github', 'verify', 'export'}:
+            if action in {'refresh', 'refresh-github', 'verify', 'export', 'acquire', 'verify-library'}:
                 engine = core_kind(settings)
                 core = None
                 if action != 'export':
@@ -69,12 +75,21 @@ def execute(paths, action="refresh-github", callback=None, control=None):
                 prior = None
                 try: prior = paths.current()
                 except AppError: pass
-                previous_report = read_json(prior / 'report.json', {}) if prior else {}
+                previous_report = read_mapping(prior / 'report.json') if prior else {}
+                if action in {'acquire', 'verify-library', 'export'}:
+                    try: working_nodes, previous_report = read_library(paths)
+                    except AppError:
+                        if action != 'acquire': raise
+                        working_nodes, previous_report = [], {}
+                        log('节点库无法读取，本次重新获取，不使用历史候选。')
+                else:
+                    working_nodes = normalize_nodes(read_yaml(prior / 'free-nodes.yaml', {}).get('proxies', [])) if prior else []
                 source_report = {}
-                if action in {"refresh", "refresh-github"}:
+                if action in {"refresh", "refresh-github", 'acquire'}:
                     settings['fetch']['_cache_folder'] = str(paths.data / 'source-cache')
-                    previous = normalize_nodes(read_yaml(prior / 'free-nodes.yaml', {}).get('proxies', [])) if prior and settings['fetch']['use_history'] else []
-                    delays = previous_report.get('verification', {}).get('delays_ms', {})
+                    previous = working_nodes if settings['fetch']['use_history'] else []
+                    previous_checks = previous_report.get('verification', {})
+                    delays = previous_checks.get('delays_ms', {}) if isinstance(previous_checks, dict) else {}
                     history, _ = fair_candidates([previous], min(len(previous), settings['fetch']['max_candidates']),
                                                  settings['fetch']['max_candidates'], delays)
                     reserve = min(len(history), 200, settings['fetch']['max_candidates'] // 5)
@@ -98,18 +113,19 @@ def execute(paths, action="refresh-github", callback=None, control=None):
                                  summary_text(state['summary']), unique=source_report.get('unique', 0),
                                  selected=len(candidates), summary=state['summary'],
                                  sources=[{k: v for k, v in source.items() if k not in {'key', 'node_ids'}} for source in source_report.get('details', [])])
-                elif action == "verify":
-                    if not prior: raise AppError("没有现有订阅，请先更新节点。")
-                    candidates = read_yaml(prior / "free-nodes.yaml", {}).get("proxies", [])
-                    source_report = deepcopy(previous_report.get('fetch', {}))
+                elif action in {'verify', 'verify-library'}:
+                    if not working_nodes: raise AppError("没有现有节点，请先获取节点。")
+                    candidates = working_nodes
+                    old_fetch = previous_report.get('fetch', {})
+                    source_report = deepcopy(old_fetch) if isinstance(old_fetch, dict) else {}
                     source_report.setdefault('summary', {}).update(data_origin='recheck', downloaded=0, cache=0, stale_cache=0,
                                                                   history_candidates=len(candidates), selected=len(candidates))
                 elif action == "export":
-                    if not prior: raise AppError('尚无免费节点，请先获取 GitHub 节点池。')
-                    candidates = read_yaml(prior / "free-nodes.yaml", {}).get("proxies", [])
+                    if not working_nodes: raise AppError('尚无免费节点，请先从 GitHub 公开源获取节点。')
+                    candidates = working_nodes
                 else: raise AppError("未知操作。")
                 candidates = normalize_nodes(candidates)
-                if not candidates: raise AppError('没有可导出的免费节点，请先获取节点池；原导出保持不变。')
+                if not candidates: raise AppError('没有可导出的免费节点，请先获取节点；原导出保持不变。')
                 if action == "export":
                     free = candidates
                     report = dict(previous_report, mode='reexport')
@@ -137,14 +153,24 @@ def execute(paths, action="refresh-github", callback=None, control=None):
                 report['export_core'] = 'mihomo' if core and engine == 'mihomo' else 'structure'
                 report['export_warning'] = '' if core and engine == 'mihomo' else '仅完成结构校验，未运行 Mihomo 配置检查；导出不代表重新检测。'
                 report['verification_core'] = previous_report.get('verification_core') if action == 'export' else engine
+                if action in {'acquire', 'verify-library'}:
+                    result = save_library(paths, free, report, control)
+                    state['library_id'] = result['library_id']
+                    state['status'] = 'success'
+                    log(f'节点库已更新：{len(free)} 个。请到“订阅导出”生成 / 更新导出文件。')
+                    return result
                 control.check()
                 control.emit('export', 0, 3, '生成并校验各客户端的订阅文件')
                 folder, result = publish(paths, free, report, core=core if engine == 'mihomo' else None, control=control,
                                          port=settings['exports']['mihomo_port'])
                 log(f"免费节点已导出：{result['counts']['free']} 个")
                 state["generation"] = folder.name
-                prune_exports(paths, settings["exports"]["keep_generations"], log)
-                control.check()
+                # Publication is the commit point. A late cancel must not label a
+                # successfully activated generation as failed or unchanged.
+                try: prune_exports(paths, settings["exports"]["keep_generations"], log)
+                except (AppError, OSError):
+                    state['cleanup_warning'] = '导出已完成，部分历史文件未能清理，下次更新时重试。'
+                    log(state['cleanup_warning'])
             else: raise AppError('未知操作。')
             state["status"] = "success"
             log("任务完成")

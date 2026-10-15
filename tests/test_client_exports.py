@@ -161,7 +161,7 @@ def test_simple_export_page_and_optional_address_tools(tmp_path, monkeypatch):
         app.show('subscriptions')
         assert not any(isinstance(widget, ttk.Combobox) for widget in widgets(app.main))
         assert [widget.cget('text') for widget in widgets(app.main) if isinstance(widget, tk.Button)] == [
-            '获取 GitHub 节点池', '生成 / 更新导出文件']
+            '从 GitHub 公开源获取节点', '生成 / 更新导出文件']
         publish(paths, [node()], {})
         app.show('subscriptions')
         assert (paths.client_exports('v2rayN') / 'free.txt').read_text(encoding='utf-8').startswith('ss://')

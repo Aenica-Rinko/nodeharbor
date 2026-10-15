@@ -33,12 +33,15 @@ def transport(node):
     q = {'type': network}
     if network == 'ws':
         opts = node.get('ws-opts', {})
+        if not isinstance(opts, dict): raise Unsupported('WebSocket 参数格式无效')
         headers = opts.get('headers', {})
+        if not isinstance(headers, dict): raise Unsupported('WebSocket 请求头格式无效')
         if set(headers) - {'Host', 'host'} or set(opts) - {'path', 'headers'}:
             raise Unsupported('WebSocket 自定义参数无法完整转换')
         q.update(path=opts.get('path', '/'), host=headers.get('Host', headers.get('host', '')))
     if network == 'grpc':
         opts = node.get('grpc-opts', {})
+        if not isinstance(opts, dict): raise Unsupported('gRPC 参数格式无效')
         if set(opts) - {'grpc-service-name'}:
             raise Unsupported('gRPC 自定义参数无法完整转换')
         q['serviceName'] = opts.get('grpc-service-name', '')
@@ -70,6 +73,7 @@ def to_uri(node):
         plugin = node.get('plugin')
         opts = node.get('plugin-opts', {})
         if plugin:
+            if not isinstance(opts, dict): raise Unsupported('Shadowsocks 插件参数格式无效')
             if plugin in {'obfs', 'obfs-local'}:
                 if opts.get('mode', opts.get('obfs')) != 'http' or set(opts) - {'mode', 'host', 'obfs', 'obfs-host'}:
                     raise Unsupported('v2rayN 不支持该 Shadowsocks 混淆设置')

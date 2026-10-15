@@ -16,8 +16,9 @@ def main(argv=None):
     parser.add_argument("--home", help="应用数据根目录，默认应用所在文件夹")
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for command, help_text in [("refresh", "获取并验证免费节点"), ("verify", "重新检测现有免费节点"),
-                               ("refresh-github", "获取 GitHub 公开节点池并验证导出"),
+    for command, help_text in [('acquire', '获取并检测节点，仅更新内部节点库'), ('verify-library', '重新检测内部节点库，不导出'),
+                               ("refresh", "获取并验证导出免费节点"), ("verify", "重新检测并导出现有免费节点"),
+                               ("refresh-github", "从 GitHub 公开源获取节点并验证导出"),
                                ("export", "使用现有免费节点重新导出")]:
         p = sub.add_parser(command, help=help_text)
     for command, help_text in [("status", "查看真实状态与统计"), ("doctor", "检查依赖、配置、核心和导出"),
@@ -28,12 +29,12 @@ def main(argv=None):
     serve.add_argument("--port", type=int)
     args = parser.parse_args(argv)
     paths = Paths.discover(args.home)
-    paths.ensure()
     try:
+        paths.ensure()
         if args.command == "init":
             created = initialize(paths)
             print("已初始化：" + "、".join(created) if created else "配置已存在，未覆盖任何文件。")
-            print('下一步：配置检测核心，获取 GitHub 公开节点池。')
+            print('下一步：配置检测核心，从 GitHub 公开源获取节点。')
         elif args.command == "gui":
             from .desktop import main as desktop_main
             desktop_main(paths)
@@ -65,7 +66,8 @@ def main(argv=None):
             print('免费节点导出：引用检查、所选核心语法检查通过')
             print("网络连通性：未检测；请使用 refresh 或 verify")
         elif args.command == "serve":
-            port = args.port or load_settings(paths)["subscription"]["port"]
+            port = args.port if args.port is not None else load_settings(paths)["subscription"]["port"]
+            if not 1 <= port <= 65535: raise AppError('本地订阅端口必须是 1–65535 的整数。')
             with create_server(paths, port) as server:
                 print(f"订阅服务：http://127.0.0.1:{port}/free.yaml", flush=True)
                 server.serve_forever()

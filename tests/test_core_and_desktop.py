@@ -74,13 +74,14 @@ def test_first_run_sources_save_and_reject_invalid_urls(tmp_path, monkeypatch):
         assert not (paths.config / 'secrets.json').exists()
         app.show('sources')
         app.extra_public_sources_text.insert('1.0', 'https://raw.githubusercontent.com/fixture/repo/main/sub\nhttps://raw.githubusercontent.com/fixture/repo/main/sub\n')
-        app.save_public_sources()
+        app.add_manual_sources()
         from nodeharbor.config import load_settings
-        assert load_settings(paths)['fetch']['public_sources'] == ['https://raw.githubusercontent.com/fixture/repo/main/sub']
+        assert load_settings(paths)['fetch']['node_pools'][0]['urls'] == ['https://raw.githubusercontent.com/fixture/repo/main/sub']
+        assert load_settings(paths)['fetch']['node_pools'][0]['enabled'] is False
         before = (paths.config / 'settings.yaml').read_bytes()
         app.extra_public_sources_text.delete('1.0', 'end')
         app.extra_public_sources_text.insert('1.0', 'file:///local/config.yaml')
-        app.save_public_sources()
-        assert errors
+        from nodeharbor.storage import AppError
+        with pytest.raises(AppError): app.add_manual_sources()
         assert (paths.config / 'settings.yaml').read_bytes() == before
     finally: app.close()

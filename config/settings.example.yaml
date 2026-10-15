@@ -14,6 +14,7 @@ fetch:
   nodes_per_source: 200
   github_sources: null
   public_sources: []
+  node_pools: []
   auto_local_proxy: true
 verification:
   mihomo_path: ''

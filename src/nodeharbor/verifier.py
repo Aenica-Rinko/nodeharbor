@@ -185,7 +185,7 @@ def _verify_nodes(core, nodes, options, log, control, pool):
                         return pool.request('probe', {
                             'url': url + '/proxies/' + quote(f'probe-{index}', safe='') + '/delay',
                             'params': {'url': target, 'timeout': options['timeout_ms'], 'expected': '200-299'},
-                            'headers': headers, 'timeout': timeout}, timeout + 5)
+                            'headers': headers, 'timeout': timeout, 'confirm_expected': True}, timeout + 5)
                     result = assess(request, options, control)
                     with lock: quality[identity(batch[index])] = result
                     if result['quality'] != 'failed':

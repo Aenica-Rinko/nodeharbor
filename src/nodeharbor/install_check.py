@@ -42,6 +42,20 @@ def check_installation(report_file):
             require(len(app.selected_public_sources) == 6, 'Quick source preset')
             require(app.source_budget_value.get() == '400', 'Quick candidate budget')
             result['checks'].append('public source catalog and selections')
+            app.open_source_search(); root.update()
+            dialog = app.search_dialog
+            dialog.receive({'mode': 'search', 'incomplete': False, 'repositories': [
+                {'name': 'example/free', 'branch': 'main', 'description': 'Fixture', 'updated': ''}]})
+            dialog.repo_tree.selection_set('0'); root.update()
+            require(dialog.inspect_button.cget('state') == 'normal', 'Search repository selection')
+            dialog.receive({'mode': 'files', 'repository': 'example/free', 'limited': False,
+                            'files': [{'path': 'sub', 'url': 'https://raw.githubusercontent.com/example/free/main/sub', 'size': 10}]})
+            dialog.file_tree.selection_set('0'); root.update(); dialog.add(); dialog.add()
+            require(len(app.custom_pools) == 1 and app.custom_pools[0]['urls'] == ['https://raw.githubusercontent.com/example/free/main/sub'] and not app.custom_pools[0]['enabled'],
+                    'Search selection deduplication')
+            dialog.close()
+            require(network_job('github-discovery', {'mode': 'invalid'}) == {'error': 'response'}, 'Packaged discovery worker')
+            result['checks'].append('public repository search dialog and packaged discovery worker')
             app.show('subscriptions'); root.update()
             require(len(app.export_action_buttons) == 2, 'Export actions')
             require(set(app.client_export_links) == {'Mihomo', 'Clash-Verge-Rev', 'v2rayN'}, 'Client cards')

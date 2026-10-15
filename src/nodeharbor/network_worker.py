@@ -6,6 +6,9 @@ import requests
 
 
 def perform(operation, payload):
+    if operation == 'github-discovery':
+        from .github_search import perform as discover
+        return discover(payload)
     if operation == "fetch":
         from .fetcher import download, download_with_report
         if payload['options'].get('_stream_progress'):
@@ -19,12 +22,29 @@ def perform(operation, payload):
         from .verifier import tcp_ready
         return tcp_ready(payload["node"], payload["timeout"])
     if operation == "probe":
+        payload = dict(payload)
+        confirm_expected = payload.pop('confirm_expected', False)
         with requests.Session() as session:
             session.trust_env = False
             response = session.get(**payload)
             if response.ok:
                 data = response.json()
-                return data.get("delay") if isinstance(data, dict) else None
+                delay = data.get('delay') if isinstance(data, dict) else None
+                if confirm_expected and delay is not None:
+                    # URLTest may return a delay when the expected HTTP status
+                    # failed. Confirm the URL-specific result instead of latency alone.
+                    status = session.get(payload['url'].removesuffix('/delay'),
+                                         headers=payload.get('headers', {}), timeout=payload['timeout'])
+                    if not status.ok: return None
+                    info = status.json()
+                    extra = info.get('extra', {}) if isinstance(info, dict) else {}
+                    target = extra.get(payload['params']['url'], {}) if isinstance(extra, dict) else {}
+                    if not isinstance(target, dict) or target.get('alive') is not True: return None
+                    history = target.get('history')
+                    if not isinstance(history, list) or not history or not isinstance(history[-1], dict): return None
+                    recorded_delay = history[-1].get('delay')
+                    if type(recorded_delay) not in (int, float) or recorded_delay <= 0: return None
+                return delay
             return None
     if operation == 'http-probe':
         import time
@@ -34,7 +54,7 @@ def perform(operation, payload):
             proxy = f"http://127.0.0.1:{payload['port']}"
             with session.get(payload['url'], proxies={'http': proxy, 'https': proxy},
                              timeout=payload['timeout'], stream=True) as response:
-                return max(1, round((time.monotonic() - started) * 1000)) if 200 <= response.status_code < 400 else None
+                return max(1, round((time.monotonic() - started) * 1000)) if 200 <= response.status_code < 300 else None
     raise ValueError("Unknown operation")
 
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nodeharbor"
-version = "1.0.0"
+version = "1.1.0"
 description = "Local proxy subscription manager with isolated Mihomo verification"
 requires-python = ">=3.10"
 readme = "README.md"

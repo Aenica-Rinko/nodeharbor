@@ -105,12 +105,19 @@ def _publish(paths, free, report, core=None, control=None, port=7890):
             control.check()
             write_json(paths.exports / "current.json", {"generation": generation})
     except BaseException:
-        shutil.rmtree(folder)
+        try: shutil.rmtree(folder)
+        except OSError: pass  # Keep the original failure; never hide it with cleanup errors.
         raise
     return folder, report
 
 
 def prune_exports(paths, keep, log=lambda _: None):
+    # Profiles may share an export root; never prune another profile's active publication.
+    with file_lock(paths.exports / 'exports.lock'):
+        _prune_exports(paths, keep, log)
+
+
+def _prune_exports(paths, keep, log):
     """Called under app_lock after publication; only remove owned generation folders."""
     root = paths.exports.resolve()
     current = paths.current().resolve()

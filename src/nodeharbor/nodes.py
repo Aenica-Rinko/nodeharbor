@@ -40,7 +40,9 @@ def normalize_nodes(nodes, strict=False):
             if not isinstance(raw, dict): raise ValueError("节点必须为对象")
             p = {k: deepcopy(v) for k, v in raw.items() if isinstance(k, str) and not k.startswith("_")}
             p["type"] = aliases.get(str(p.get("type", "")).lower(), str(p.get("type", "")).lower())
-            p["server"] = str(p.get("server", "")).strip().strip("[]")
+            if not isinstance(p.get('server'), str): raise ValueError('无效服务器或端口')
+            p["server"] = p['server'].strip().strip("[]")
+            if type(p.get('port')) not in (str, int): raise ValueError('无效服务器或端口')
             p["port"] = int(p.get("port", 0))
             if p["type"] not in SUPPORTED: raise ValueError("不支持的协议")
             if not 1 <= p["port"] <= 65535 or not public_host(p["server"]): raise ValueError("无效服务器或端口")
@@ -52,13 +54,17 @@ def normalize_nodes(nodes, strict=False):
             if key in seen: continue
             seen.add(key)
             original = str(p.get("name") or f"{p['type'].upper()} 节点 {index + 1}").strip()
+            if not original: original = f"{p['type'].upper()} 节点 {index + 1}"
             name, suffix = original, 2
             while name in names:
                 name = f"{original} · {suffix}"; suffix += 1
             names.add(name); p["name"] = name
             result.append(p)
-        except (ValueError, TypeError) as exc:
-            if strict: raise AppError(f"第 {index + 1} 个节点配置无效：{exc}") from exc
+        except (ValueError, TypeError, RecursionError) as exc:
+            if strict:
+                safe = {'节点必须为对象', '不支持的协议', '无效服务器或端口', '缺少 UUID', '缺少密码', '缺少加密方式'}
+                reason = str(exc) if str(exc) in safe else '字段类型或格式无效'
+                raise AppError(f"第 {index + 1} 个节点配置无效：{reason}") from None
     return result
 
 
@@ -150,7 +156,7 @@ def parse_link(link):
             if q.get('pinSHA256'): p['fingerprint'] = q['pinSHA256']
         if kind == 'tuic' and q.get('congestion_control'): p['congestion-controller'] = q['congestion_control']
         return p
-    except (ValueError, TypeError, KeyError, UnicodeError, RecursionError):
+    except (ValueError, TypeError, KeyError, AttributeError, UnicodeError, RecursionError):
         return None
 
 
