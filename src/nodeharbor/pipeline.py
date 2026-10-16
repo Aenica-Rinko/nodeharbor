@@ -10,7 +10,7 @@ from .config import find_mihomo, find_core, core_kind, validate_core, load_setti
 from .exporter import publish, prune_exports
 from .fetcher import fetch_all, SourcesUnavailable
 from .nodes import normalize_nodes
-from .storage import AppError, app_lock, read_json, read_yaml, write_json
+from .storage import AppError, app_lock, write_json
 from .nodes import identity
 from .source_plan import fair_candidates, verification_sources, persist_sources, summary_text, read_mapping
 from .verifier import verify_nodes
@@ -72,18 +72,11 @@ def execute(paths, action="refresh-github", callback=None, control=None):
                     except AppError:
                         control.check(); core = None
                         log('未找到可用的 Mihomo 核心，本次执行结构校验导出，不更新节点检测时间。')
-                prior = None
-                try: prior = paths.current()
-                except AppError: pass
-                previous_report = read_mapping(prior / 'report.json') if prior else {}
-                if action in {'acquire', 'verify-library', 'export'}:
-                    try: working_nodes, previous_report = read_library(paths)
-                    except AppError:
-                        if action != 'acquire': raise
-                        working_nodes, previous_report = [], {}
-                        log('节点库无法读取，本次重新获取，不使用历史候选。')
-                else:
-                    working_nodes = normalize_nodes(read_yaml(prior / 'free-nodes.yaml', {}).get('proxies', [])) if prior else []
+                try: working_nodes, previous_report = read_library(paths)
+                except AppError:
+                    if action not in {'acquire', 'refresh', 'refresh-github'}: raise
+                    working_nodes, previous_report = [], {}
+                    log('节点库无法读取，本次重新获取，不使用历史候选。')
                 source_report = {}
                 if action in {"refresh", "refresh-github", 'acquire'}:
                     settings['fetch']['_cache_folder'] = str(paths.data / 'source-cache')
@@ -131,7 +124,6 @@ def execute(paths, action="refresh-github", callback=None, control=None):
                     report = dict(previous_report, mode='reexport')
                     log('使用现有免费节点，重新生成全部客户端格式')
                 else:
-                    if not candidates: raise AppError("没有可检测的免费节点，保留上次导出。")
                     if engine == 'xray':
                         from .xray_verifier import verify_xray
                         free, checks = verify_xray(core, candidates, settings['verification'], log, control)
@@ -153,9 +145,13 @@ def execute(paths, action="refresh-github", callback=None, control=None):
                 report['export_core'] = 'mihomo' if core and engine == 'mihomo' else 'structure'
                 report['export_warning'] = '' if core and engine == 'mihomo' else '仅完成结构校验，未运行 Mihomo 配置检查；导出不代表重新检测。'
                 report['verification_core'] = previous_report.get('verification_core') if action == 'export' else engine
+                if action != 'export':
+                    # All entry points share the working library. Combined CLI
+                    # commands may fail to export; the verified library stays retryable.
+                    report = save_library(paths, free, report, control)
+                    state['library_id'] = report['library_id']
                 if action in {'acquire', 'verify-library'}:
-                    result = save_library(paths, free, report, control)
-                    state['library_id'] = result['library_id']
+                    result = report
                     state['status'] = 'success'
                     log(f'节点库已更新：{len(free)} 个。请到“订阅导出”生成 / 更新导出文件。')
                     return result
@@ -184,4 +180,10 @@ def execute(paths, action="refresh-github", callback=None, control=None):
         finally:
             state["finished_at"] = datetime.now(timezone.utc).isoformat()
             state["elapsed_seconds"] = round(time.monotonic() - started, 2)
-            write_json(paths.data / "state" / "last-run.json", state)
+            try:
+                write_json(paths.data / "state" / "last-run.json", state)
+            except (AppError, OSError):
+                # Diagnostic state is not the library/export commit. Do not turn a
+                # completed operation into a failure, or hide the original exception.
+                try: log('最近任务记录未能写入；节点库和导出以实际保存结果为准。')
+                except (AppError, OSError): pass

@@ -8,8 +8,9 @@ from .github_search import clean_query, discover
 
 
 class SourceSearchDialog:
-    def __init__(self, desktop, repository=None):
+    def __init__(self, desktop, repository=None, replace=False):
         self.desktop = desktop
+        self.replacing = dict(repository) if replace and repository else None
         self.repositories, self.files = [], []
         self.file_repository = None
         self.window = tk.Toplevel(desktop.root)
@@ -50,7 +51,7 @@ class SourceSearchDialog:
         self.file_tree = self.table(body, ('path', 'size'), [('候选文件（未检测）', 570), ('大小', 130)], 5, multiple=True)
         self.file_tree.bind('<<TreeviewSelect>>', lambda _: self.update_busy())
         row = ttk.Frame(body); row.pack(fill='x', pady=(10, 0))
-        self.add_button = desktop.button(row, '使用选中的订阅文件', self.add, primary=True)
+        self.add_button = desktop.button(row, '替换为选中的订阅文件' if self.replacing else '使用选中的订阅文件', self.add, primary=True)
         self.add_button.pack(side='left')
         desktop.button(row, '关闭', self.close).pack(side='right')
         self.update_busy()
@@ -58,6 +59,8 @@ class SourceSearchDialog:
             item = dict(repository, description='请查看候选文件并选择要使用的订阅文件。', updated='')
             self.receive({'mode': 'search', 'repositories': [item], 'incomplete': False})
             self.repo_tree.selection_set('0')
+            if self.replacing:
+                self.note.set('替换模式：仅替换该来源的文件。文件变化后自动停用，需回到列表手动启用。')
         self.entry.focus_set()
 
     @staticmethod
@@ -130,11 +133,12 @@ class SourceSearchDialog:
             self.file_note.set(result['repository'] + f"：找到 {len(self.files)} 个候选文件，尚未验证内容。" +
                                ('仅显示部分文件，可打开仓库说明查找。' if result['limited'] else '') +
                                ('请打开仓库说明，手动复制订阅文件地址。' if not self.files else ''))
-            self.note.set('选择文件后点击“使用选中的订阅文件”；新节点池默认停用，请回到列表手动启用。')
+            self.note.set('选择文件后点击“替换为选中的订阅文件”，原文件列表将被替换，文件变化后需手动启用。' if self.replacing else
+                          '选择文件后点击“使用选中的订阅文件”；新节点池默认停用，请回到列表手动启用。')
         self.update_busy()
 
     def join_repository(self):
-        if self.desktop.busy: return
+        if self.desktop.busy or self.replacing: return
         repo = self.selected_repo()
         if not repo: return
         urls = []
@@ -146,16 +150,21 @@ class SourceSearchDialog:
         if self.desktop.busy or not self.file_repository: return
         urls = [self.files[int(i)]['url'] for i in self.file_tree.selection()]
         if not urls: return
-        self.note.set(self.desktop.add_catalog_repository(self.file_repository, urls))
+        if self.replacing:
+            if self.file_repository['name'].casefold() != self.replacing['name'].casefold(): return
+            self.note.set(self.desktop.replace_catalog_files(self.replacing, urls))
+            self.replacing = next(dict(p) for p in self.desktop.custom_pools if p['name'].casefold() == self.replacing['name'].casefold())
+        else:
+            self.note.set(self.desktop.add_catalog_repository(self.file_repository, urls))
 
     def update_busy(self):
         if not self.exists(): return
         busy = self.desktop.busy
-        self.search_button.config(state='disabled' if busy else 'normal')
-        self.entry.config(state='disabled' if busy else 'normal')
+        self.search_button.config(state='disabled' if busy or self.replacing else 'normal')
+        self.entry.config(state='disabled' if busy or self.replacing else 'normal')
         self.inspect_button.config(state='normal' if not busy and self.selected_repo() else 'disabled')
         self.open_button.config(state='normal' if self.selected_repo() else 'disabled')
-        self.join_button.config(state='normal' if not busy and self.selected_repo() else 'disabled')
+        self.join_button.config(state='normal' if not busy and self.selected_repo() and not self.replacing else 'disabled')
         self.add_button.config(state='normal' if not busy and self.file_tree.selection() else 'disabled')
         cancelling = busy and self.desktop.control and self.desktop.control.event.is_set()
         self.cancel_button.config(state='normal' if busy and not cancelling else 'disabled',

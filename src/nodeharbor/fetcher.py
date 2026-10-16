@@ -13,7 +13,7 @@ from urllib3.util.retry import Retry
 from .nodes import normalize_nodes, parse_subscription, identity
 from .public_sources import GITHUB_POOLS, public_fallbacks, selected_pools, source_urls
 from .download_network import primary_proxies, local_proxy_candidates, proxy_label, error_code, DownloadFailed
-from .storage import AppError, read_json, write_json, file_lock
+from .storage import AppError, write_json, file_lock
 from .tasks import Cancelled, TaskControl, network_job, parallel_map, NetworkFailure, DeadlineExceeded, NetworkPool
 from .source_plan import source_key, priority, read_mapping, fair_candidates, nonnegative
 from . import __version__
@@ -57,9 +57,10 @@ def api_gate(url, options):
     if not url.startswith('https://api.github.com/') or not options.get('_cache_folder'):
         yield; return
     folder = Path(options['_cache_folder'])
-    lock = file_lock(folder / 'github-api.lock')
     deadline = time.monotonic() + options.get('source_timeout_seconds', 60)
     while True:
+        # A generator context manager cannot be entered again after a failed enter.
+        lock = file_lock(folder / 'github-api.lock')
         try: lock.__enter__(); break
         except AppError:
             notify(options, 'api_queue')

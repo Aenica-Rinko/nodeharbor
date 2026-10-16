@@ -28,6 +28,22 @@ def close_logger(paths):
     for handler in list(logger.handlers): handler.close(); logger.removeHandler(handler)
 
 
+def test_download_check_respects_another_running_pipeline(tmp_path, monkeypatch):
+    from nodeharbor.desktop import Desktop
+    from nodeharbor.storage import app_lock
+    app = Desktop.__new__(Desktop)
+    app.busy = False
+    app.paths = Paths(tmp_path)
+    app.persist_source_choices = lambda: True
+    app.public_source_settings = lambda: deepcopy(DEFAULTS)
+    app.start_task = lambda action, work, **kw: work(TaskControl())
+    fetch = Mock()
+    monkeypatch.setattr('nodeharbor.ui.sources.fetch_all', fetch)
+    with app_lock(app.paths):
+        with pytest.raises(AppError, match='另一项更新'): app.test_public_sources()
+    fetch.assert_not_called()
+
+
 def test_client_path_profiles_preserve_legacy_config_and_find_bundled_core(tmp_path):
     paths = Paths(tmp_path); initialize(paths)
     root = tmp_path / 'Client'; root.mkdir()
@@ -118,7 +134,8 @@ def test_v2rayn_xray_pipeline_uses_selected_engine(tmp_path, monkeypatch):
 
 def test_desktop_core_profiles_downloads_and_live_progress(tmp_path, monkeypatch):
     import tkinter as tk
-    from nodeharbor.desktop import Desktop, DOWNLOADS
+    from nodeharbor.desktop import Desktop
+    from nodeharbor.ui.common import DOWNLOADS
     try: root = tk.Tk()
     except tk.TclError: pytest.skip('Display unavailable')
     root.withdraw(); paths = Paths(tmp_path); app = Desktop(root, paths)

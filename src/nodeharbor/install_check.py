@@ -56,6 +56,16 @@ def check_installation(report_file):
             dialog.close()
             require(network_job('github-discovery', {'mode': 'invalid'}) == {'error': 'response'}, 'Packaged discovery worker')
             result['checks'].append('public repository search dialog and packaged discovery worker')
+            from .source_catalog import update_catalog, remove_pool
+            from .diagnostic_report import export_report
+            app.replace_catalog_files(dict(app.custom_pools[0]), ['https://raw.githubusercontent.com/example/free/main/replacement.yaml'])
+            require(not app.custom_pools[0]['enabled'] and app.custom_pools[0]['urls'][0].endswith('replacement.yaml'), 'Replace source files')
+            update_catalog(paths, lambda options: remove_pool(options, 'example/free'))
+            app.show('sources'); root.update()
+            require(not app.custom_pools, 'Remove user source')
+            diagnostic = json.loads(export_report(paths).read_text(encoding='utf-8'))
+            require(diagnostic['schema_version'] == 1 and str(paths.root) not in json.dumps(diagnostic), 'Private paths excluded')
+            result['checks'].append('source maintenance and offline redacted diagnostics')
             app.show('subscriptions'); root.update()
             require(len(app.export_action_buttons) == 2, 'Export actions')
             require(set(app.client_export_links) == {'Mihomo', 'Clash-Verge-Rev', 'v2rayN'}, 'Client cards')

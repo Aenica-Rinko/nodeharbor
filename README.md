@@ -2,9 +2,9 @@
 
 帮助用户获取 GitHub 公开免费节点、检测可用性，并导出给 Mihomo、Clash-Verge-Rev 和 v2rayN。
 
-**v1.1.0 · Beta · Windows x64 / Python 3.10+ · GPL-3.0-only**
+**v1.2.0 · Beta · Windows x64 / Python 3.10+ · GPL-3.0-only**
 
-[下载 Windows 完整 ZIP](https://github.com/Aenica-Rinko/nodeharbor/releases/download/v1.1.0/NodeHarbor-1.1.0-windows-x64.zip) · [版本说明与校验文件](https://github.com/Aenica-Rinko/nodeharbor/releases/tag/v1.1.0)
+[下载 v1.2.0 Windows ZIP](https://github.com/Aenica-Rinko/nodeharbor/releases/download/v1.2.0/NodeHarbor-1.2.0-windows-x64.zip) · [版本说明与校验文件](https://github.com/Aenica-Rinko/nodeharbor/releases/tag/v1.2.0)
 
 ![获取与导出](docs/images/export-guide.png)
 
@@ -29,6 +29,10 @@
 
 搜索按最近更新列出最多 20 个仓库，每个仓库最多列出 100 个候选文件；它们尚未经过节点检测，也不代表 GitHub 上的全部节点池。搜索使用匿名 GitHub API 和应用的下载代理设置，遇到限流时会明确提示；不需要登录或 Token。可打开仓库说明确认文件用途。
 
+自选来源可以维护：选中列表中的来源，点击“编辑自选订阅文件”修改地址，或“重新搜索候选文件”后用选中的文件替换原列表。文件变化后自动停用，需手动启用；清空文件会保留一个待选择文件的来源。点击“删除自选来源”仅移除来源选择，已有节点和导出保留。内置来源使用启用 / 停用维护。
+
+选中来源可查看最近下载成功时间、连续失败次数和下次重试时间。自选来源按文件展示状态与失败原因；替换文件后不沿用旧文件的健康统计。
+
 任务进度卡片有“取消当前任务”，搜索窗口有“取消搜索”。取消会中断正在执行的网络工作进程，保留已经保存的来源与现有导出。
 
 ![公开来源](docs/images/public-sources.png)
@@ -42,6 +46,12 @@
 公开文件默认缓存 10 分钟，过期后使用 ETag / Last-Modified 校验。下载失败可使用不超过 24 小时的旧缓存，并明确标注后重新检测。连续失败的来源逐步延长重试间隔；限流时遵循等待信息。“重试下载连接”绕过缓存有效期和来源退避，但仍会遵守 GitHub API 的限流等待。查看来源详情可了解实际下载通道、最近成功时间及下次重试时间。
 
 同时最多下载 8 个来源（默认 6 个），每个源默认最多 60 秒，整轮任务默认 30 分钟。启用历史补充时最多预留总名额的五分之一、上限 200 个，用于重新检测历史可用节点，优先低延迟节点。全部来源无数据时可重新检测历史节点，界面明确提示“没有取得新数据”。没有节点通过时保留当前导出；取消不会触发历史回退。
+
+## 故障诊断
+
+在“运行日志”或“设置”点击“导出脱敏诊断报告”，自动在应用数据目录的 `logs/diagnostics` 中生成 JSON 文件，并提示保存位置。此操作离线完成，不自动上传。
+
+报告包含应用版本、核心是否找到、下载与检测统计、允许的错误分类和 HTTP 状态；自选仓库及文件使用匿名编号。报告不包含原始配置、原始日志、节点地址或密码、订阅链接、令牌、私人路径。记录损坏时会显示读取状态，仍尽可能生成报告；导出诊断不会启动代理核心或重新测试网络。
 
 ## 检测标准
 
@@ -109,7 +119,7 @@ Gist 上传、私人订阅输入和 Base64 YAML 导出已移除。旧的本地�
 
 更多参数：`fetch.cache_minutes`（默认 10，0 为每次请求）、`fetch.source_timeout_seconds`（60）、`task.timeout_seconds`（1800）、`verification.https_test_url`、`verification.rounds`（2）、`verification.retry_failed`（1）、`exports.mihomo_port`（7890）、`exports.keep_generations`（5，最少 2）。测试 HTTPS 地址必须为 HTTPS；核心路径按三个客户端分别保存。`verification.timeout_ms` 默认 6000；Mihomo 检测最大 32767，Xray 最大 60000，超出核心接口范围会明确拒绝，避免全部节点被误判失败。
 
-桌面获取与检测结果保存在数据目录的 `data/library/free.json`，与客户端导出分开。首次升级时兼容读取既有导出作为节点库；获取失败或取消时保留上次节点库和导出。命令行可用 `acquire`、`verify-library`、`export` 分别完成获取、重新检测与导出；旧 `refresh`、`refresh-github`、`verify` 组合命令保留兼容行为。
+桌面获取与检测结果保存在数据目录的 `data/library/free.json`，与客户端导出分开。首次升级时兼容读取既有导出作为节点库；获取失败或提交前取消时保留上次节点库和导出。命令行可用 `acquire`、`verify-library`、`export` 分别完成获取、重新检测与导出；旧 `refresh`、`refresh-github`、`verify` 组合命令使用同一节点库，检测成功后更新节点库，再生成导出。如果这一步导出失败，已验证的节点仍保留，旧客户端文件保持有效，可直接运行 `export` 重试。
 
 ## 命令行与开发
 

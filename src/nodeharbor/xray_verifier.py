@@ -183,7 +183,6 @@ def _verify_xray(core, nodes, options, log, control, pool):
         with running_xray(core, batch, control) as (ports, process):
             def probe(index):
                 nonlocal completed, batch_passed, tested, stable
-                delay = None
                 passed = False
                 try:
                     result = assess(lambda target: pool.request('http-probe', {'url': target, 'port': ports[index],

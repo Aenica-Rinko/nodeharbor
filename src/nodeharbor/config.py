@@ -30,7 +30,11 @@ DEFAULTS = {
 
 
 def load_settings(paths):
-    raw = read_yaml(paths.config / "settings.yaml", {})
+    return validate_settings(paths, read_yaml(paths.config / "settings.yaml", {}))
+
+
+def validate_settings(paths, raw):
+    """Validate candidate settings before persistence as well as after loading."""
     if not isinstance(raw, dict): raise AppError("settings.yaml 必须是键值配置。")
     out = deepcopy(DEFAULTS)
     for key, value in raw.items():
@@ -77,9 +81,11 @@ def load_settings(paths):
     for key, scheme in [('test_url', 'http'), ('https_test_url', 'https')]:
         value = verification.get(key)
         try:
+            if not isinstance(value, str) or any(c.isspace() for c in value): raise ValueError()
             u = urlsplit(value)
             if u.scheme not in ({'http', 'https'} if key == 'test_url' else {'https'}) or not u.hostname or u.username or u.password:
                 raise ValueError()
+            if u.port is not None and not 1 <= u.port <= 65535: raise ValueError()
         except (TypeError, ValueError): raise AppError(f'verification.{key} 必须是无认证的 {scheme.upper()} 测试地址。') from None
     from .public_sources import GITHUB_POOLS, github_file_url
     chosen = out['fetch']['github_sources']

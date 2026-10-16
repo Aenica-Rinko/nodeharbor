@@ -167,11 +167,11 @@ def test_simple_export_page_and_optional_address_tools(tmp_path, monkeypatch):
         assert (paths.client_exports('v2rayN') / 'free.txt').read_text(encoding='utf-8').startswith('ss://')
         assert (paths.client_exports('Mihomo') / 'free.yaml').is_file()
         opened = []
-        monkeypatch.setattr('nodeharbor.desktop.open_path', lambda path: opened.append(path))
+        monkeypatch.setattr('nodeharbor.ui.exports.open_path', lambda path: opened.append(path))
         app.open_exports('v2rayN')
         assert opened == [paths.client_exports('v2rayN')]
         # Random port for isolated tests, actual UI settings retain valid configured ports.
-        monkeypatch.setattr('nodeharbor.desktop.load_settings', lambda _: dict(DEFAULTS, subscription={'port': 0}))
+        monkeypatch.setattr('nodeharbor.ui.exports.load_settings', lambda _: dict(DEFAULTS, subscription={'port': 0}))
         app.show('settings')
         app.copy_subscription('v2rayN')
         assert app.server and root.clipboard_get().endswith('/free.v2ray.base64.txt')

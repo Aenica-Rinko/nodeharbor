@@ -31,6 +31,20 @@ def test_invalid_settings_sections_have_actionable_errors(tmp_path, section, val
     with pytest.raises(AppError, match=section):load_settings(paths)
 
 
+@pytest.mark.parametrize('value', ['https://example.com:wrong/probe', 'https://example.com:0/',
+                                  'https://example.com:65536/', 'https://example.com/with space'])
+def test_invalid_probe_urls_fail_before_any_network_work(tmp_path, value):
+    paths = Paths(tmp_path); paths.ensure()
+    write_yaml(paths.config / 'settings.yaml', {'verification': {'https_test_url': value}})
+    with pytest.raises(AppError, match='https_test_url'): load_settings(paths)
+
+
+@pytest.mark.parametrize('value', [float('inf'), float('nan'), 10**100, ['bad'], {'bad': 'record'}])
+def test_invalid_source_timestamp_cannot_crash_the_desktop(value):
+    from nodeharbor.ui.common import display_time
+    assert display_time(value) == '时间记录无效'
+
+
 def test_bad_vmess_alpn_does_not_discard_other_links():
     malformed=dict(add='example.com', port=443, id='fixture', alpn=42)
     uri='vmess://'+base64.b64encode(json.dumps(malformed).encode()).decode()

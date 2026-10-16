@@ -7,8 +7,6 @@ import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
 
-import yaml
-
 from .geo import get_country_from_name, COUNTRY_FLAG, COUNTRY_NAME
 from .nodes import normalize_nodes
 from .storage import AppError, atomic_write, write_json, write_yaml, file_lock

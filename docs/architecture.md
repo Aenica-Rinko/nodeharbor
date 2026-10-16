@@ -2,13 +2,17 @@
 
 ## 入口与模块
 
-`desktop.py` 与 `cli.py` 调用同一个 `pipeline.execute()`，桌面线程通过队列向 Tk 主线程传递进度。运行时只读取 `settings.yaml`；旧的私人配置和秘密文件不读取、不重写。
+`desktop.py` 只负责应用窗口、导航和共享控件。`ui/sources.py`、`ui/nodes.py`、`ui/exports.py`、`ui/settings.py` 分别管理来源、节点库、导出和设置；`ui/overview.py` 和 `ui/activity.py` 管理总览、日志及任务状态显示。页面通过应用壳提供的 `start_task`、`show`、`button` 等接口协作，不互相导入。
+
+`task_runner.py` 独立管理后台线程、取消控制和队列事件，不依赖 Tk。任务开始时捕获自己的控制对象；工作线程不操作控件。`ui/activity.py` 在主线程消费事件并呈现进度。桌面与 `cli.py` 使用同一个 `pipeline.execute()`。运行时只读取 `settings.yaml`；旧的私人配置和秘密文件不读取、不重写。
 
 | 模块 | 职责 |
 | --- | --- |
 | storage / config / initialize | 目录、原子写入、锁、配置校验与核心发现、空白初始化 |
 | public_sources / fetcher / download_network / source_plan | 公开 GitHub 来源、TLS 下载、代理回退、缓存、条件请求、限流、来源健康排序与公平分配候选 |
-| source_catalog / github_search / source_search_dialog | 仓库搜索、候选文件选择、默认停用的自选节点池与启停持久化 |
+| source_catalog / github_search / source_search_dialog | 仓库搜索、候选文件选择、自选来源新增/替换/删除、文件健康状态与持久化 |
+| desktop / ui / task_runner | 窗口壳、按职责拆分的页面、独立后台任务生命周期与队列交付 |
+| diagnostic_report | 离线构造允许字段的脱敏报告，不复制原始配置或日志 |
 | node_library | 内部节点库原子更新、兼容旧导出读取、待导出标识 |
 | nodes / geo / uri_export | 格式解析、含认证与传输参数的身份去重、标签地区、客户端转换 |
 | verifier / xray_verifier / quality / diagnostics | 核心隔离、兼容检查、重复 HTTP / HTTPS 检测、无敏感内容的错误摘要 |
@@ -17,6 +21,8 @@
 | subscription / progress / pipeline | 本机文件白名单服务、真实进度、任务编排与日志 |
 
 `fetch.node_pools` 记录自选仓库的名称、分支、订阅文件和启用状态。新仓库默认停用，缺少文件时不能启用；来源列表显示停用项，但下载只遍历已启用项。旧 `public_sources` 在用户编辑来源时迁移，保留原启用状态。
+
+来源维护在应用锁内重新读取并原子写入配置，保留其他设置；替换文件时比较编辑前快照，拒绝覆盖其他操作的修改。文件列表改变后来源停用，需手动重新启用；清空文件不会删除仓库条目。移除自选来源同时清除其旧配置入口，但不删除节点库和既有导出。健康记录通过文件地址的本地键精确匹配，替换或重排文件不会误用其他文件的状态。
 
 ## 获取与检测
 
@@ -29,6 +35,8 @@
 7. 保留每节点延迟样本、质量结果、来源和真实验证时间。桌面获取及重新检测只原子更新 `data/library/free.json`，以 library_id 标记本批结果；失败或提交前取消保持上次节点库。用户在订阅导出页明确点击生成文件后，才运行导出事务。重新导出保留检测信息，不伪造新的验证时间。
 
 检测仅衡量当时的请求响应，不测带宽，不保证长期可靠。国家/地区来自节点名称，不是定位结果。
+
+旧命令行组合操作同样读写内部节点库，先提交检测结果再导出；导出失败时保留可重试的节点库和旧导出，避免桌面端与命令行混用时读回过期数据。最后一次任务记录属于诊断信息，写入失败不会覆盖原始错误，也不会将已完成的节点库或导出提交改报失败。
 
 ## 进程与隐私
 
@@ -53,3 +61,5 @@ Mihomo 存在时检查两份完整 YAML；无可用 Mihomo 时只执行结构和
 ## 报告
 
 `report.json` 包含真实 verified_at、exported_at、counts.free、verification_core、export_core、config_validated、export_warning、节点来源、来源贡献和客户端转换原因。`last-run.json` 表示最近操作状态，不能代替连通性结果。
+
+可分享的诊断报告独立保存在 `logs/diagnostics/NodeHarbor-diagnostics-*.json`，字段有明确允许列表和类型检查；任意原始错误文本仅转成固定分类。内置来源使用公开目录名称，自选来源使用 `custom-N/file-M` 编号，不暴露仓库名、文件地址或其哈希。包含有限的 HTTP 状态、失败计数和规范化时间，不包含环境变量、主机名、用户名、核心路径、节点和日志原文。报告读取损坏记录时记录固定错误状态；生成过程中不联网、不运行核心、不上传。桌面连续生成报告时保留最近业务任务的诊断上下文。

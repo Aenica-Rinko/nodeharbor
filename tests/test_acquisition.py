@@ -128,3 +128,21 @@ def test_presets_and_slash_branch_have_exact_public_paths():
     url = dict(GITHUB_POOLS)['Barabama/FreeNodes']
     assert public_fallbacks(url) == ['https://api.github.com/repos/Barabama/FreeNodes/contents/nodes/cfmem.yaml?ref=feat%2Fai-crawler-v2']
     assert public_fallbacks(url + '?token=private') == []
+
+
+def test_api_gate_waits_for_contention_with_fresh_lock_contexts(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from nodeharbor.fetcher import api_gate
+    from nodeharbor.storage import AppError
+    attempts, released = [], []
+    @contextmanager
+    def busy_lock(path):
+        attempts.append(path)
+        if len(attempts) < 3: raise AppError('busy')
+        try: yield
+        finally: released.append(path)
+    monkeypatch.setattr('nodeharbor.fetcher.file_lock', busy_lock)
+    monkeypatch.setattr('nodeharbor.fetcher.time.sleep', lambda _: None)
+    with api_gate('https://api.github.com/repos/example/pool/contents/sub', {'_cache_folder': str(tmp_path)}):
+        assert len(attempts) == 3 and not released
+    assert len(released) == 1
