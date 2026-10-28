@@ -7,7 +7,7 @@ from pathlib import Path
 from datetime import datetime
 from ..client_exports import parse_timestamp
 
-BG, WHITE, INK, MUTED, BLUE, LINE = "#F3F5F9", "#FFFFFF", "#182337", "#657389", "#275DDE", "#E3E8F0"
+BG, WHITE, INK, MUTED, BLUE, LINE = "#F5F7FB", "#FFFFFF", "#172B4D", "#57657A", "#2859D8", "#DFE5EF"
 DOWNLOADS = {'Mihomo': 'https://github.com/MetaCubeX/mihomo/releases',
              'Clash-Verge-Rev': 'https://github.com/clash-verge-rev/clash-verge-rev/releases',
              'v2rayN': 'https://github.com/2dust/v2rayN/releases'}

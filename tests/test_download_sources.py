@@ -53,10 +53,12 @@ def test_explicit_proxy_and_opt_out_do_not_discover_other_routes(monkeypatch, op
 
 
 def test_proxy_fallback_preserves_tls_validation_and_reports_http_errors(monkeypatch):
+    monkeypatch.setattr('nodeharbor.fetcher.check_public_host', lambda url: url)
     from unittest.mock import MagicMock
     from nodeharbor.fetcher import download_single
     session = MagicMock(); session.__enter__.return_value = session
     response = session.get.return_value.__enter__.return_value
+    response.status_code = 200
     response.iter_content.return_value = [b'proxies: []']
     monkeypatch.setattr('nodeharbor.fetcher.requests.Session', lambda: session)
     download_single('https://example.com/sub', DEFAULTS['fetch'], proxies={'https': 'http://127.0.0.1:7890'})

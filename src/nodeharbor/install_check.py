@@ -80,7 +80,10 @@ def check_installation(report_file):
             app.task_progress.update({'stage': 'protocol', 'completed': 3, 'total': 5, 'passed': 1,
                                       'message': 'Fixture progress'})
             app.show('overview'); root.update()
-            require(app.progress_panel.winfo_exists() and app.progress_bar['maximum'] == 5, 'Task progress')
+            app.render_task_progress()
+            require(app.progress_panel is None and app.footer_progress['maximum'] == 5, 'Compact task progress')
+            app.show('logs'); root.update()
+            require(app.progress_panel.winfo_exists() and app.progress_bar['maximum'] == 5, 'Task detail progress')
             require(not callbacks, 'Progress callback failed')
             result['checks'].append('client core selection and visual task progress')
 

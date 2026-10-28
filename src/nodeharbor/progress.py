@@ -3,10 +3,10 @@ import time
 
 STAGES = {'diagnostic': '整理脱敏诊断', 'search': '搜索仓库 / 查找文件', 'core': '检查核心', 'download': '下载 / 解析', 'precheck': '连通性预检',
           'protocol': 'HTTP / HTTPS 检测', 'export': '生成导出'}
-TASKS = {'refresh-github': '从 GitHub 公开源获取节点', 'refresh': '更新节点', 'verify': '重新检测',
-         'acquire': '从 GitHub 公开源获取节点', 'verify-library': '重新检测节点库',
+TASKS = {'refresh-github': '获取已启用来源的节点', 'refresh': '更新节点', 'verify': '重新检测',
+         'acquire': '获取已启用来源的节点', 'verify-library': '重新检测节点库',
          'export': '生成订阅文件', 'check-core': '检查核心', 'test-sources': '测试公开源下载',
-         'search-sources': '搜索 GitHub 节点池', 'diagnostics': '导出脱敏诊断报告'}
+         'search-sources': '搜索节点池', 'diagnostics': '导出脱敏诊断报告'}
 
 
 class TaskProgress:

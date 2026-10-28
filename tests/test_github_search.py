@@ -1,4 +1,5 @@
 import json
+import base64
 import time
 import tkinter as tk
 from pathlib import Path
@@ -8,6 +9,65 @@ import pytest
 from nodeharbor import github_search as search
 from nodeharbor.storage import AppError, Paths
 from nodeharbor.tasks import TaskControl
+
+
+def test_cloudflare_search_queries_readmes_and_only_extracts_hosted_links(monkeypatch):
+    calls = []
+    def api(path, params, options):
+        calls.append((path, params))
+        if path == 'search/repositories':
+            return {'items': [dict(full_name='example/public', default_branch='main', private=False),
+                              dict(full_name='example/private', default_branch='main', private=True)]}
+        if path == 'repos/example/public': return {'private': False}
+        content = '\n'.join(['VLESS proxy subscriptions', 'https://demo.workers.dev/sub', 'https://demo.pages.dev/clash.yaml',
+                             'https://other.example/sub', 'https://demo.workers.dev/ip.txt',
+                             'https://demo.workers.dev/sub?token=private', 'https://demo.workers.dev/sub'])
+        return {'encoding': 'base64', 'content': base64.b64encode(content.encode()).decode()}
+    monkeypatch.setattr(search, 'api_json', api)
+    result = search.perform({'mode': 'cloudflare-repositories', 'value': {'query': 'free', 'domain': 'workers.dev'}})
+    assert len(result['repositories']) == 1
+    assert calls[0][1]['q'] == '"workers.dev" free in:readme is:public archived:false fork:false'
+    links = search.perform({'mode': 'cloudflare-links', 'value': result['repositories'][0]})
+    assert [f['url'] for f in links['files']] == ['https://demo.workers.dev/sub', 'https://demo.pages.dev/clash.yaml']
+    assert all(f['provenance'] == 'https://github.com/example/public#readme' for f in links['files'])
+    assert len(calls) == 3  # Does not contact external links during discovery.
+
+
+def test_cloudflare_discovery_preserves_partial_results_and_progress(monkeypatch):
+    events, calls = [], []
+    def job(operation, payload, control, timeout):
+        assert 0 < timeout <= 25
+        calls.append(payload)
+        if payload['mode'] == 'cloudflare-repositories':
+            return {'repositories': [dict(name='example/one', branch='main'), dict(name='example/two', branch='main')]}
+        if payload['value']['name'] == 'example/two': return {'error': 'rate_limit'}
+        return {'files': [dict(url='https://demo.workers.dev/sub', path='sub', size=0)]}
+    monkeypatch.setattr(search, 'network_job', job)
+    result = search.discover('search-cloudflare', '', {'proxy': '', 'secret': 'private'}, TaskControl(progress=events.append))
+    assert len(calls) == 4  # Duplicate repositories from the two queries are read once.
+    assert [r['name'] for r in result['repositories']] == ['example/one']
+    assert result['checked'] == 1 and result['incomplete']
+    assert '限制' in result['warnings'][0]
+    assert all('secret' not in c['options'] for c in calls)
+    assert any(e.get('total') == 2 for e in events)
+
+
+def test_cloudflare_cancel_propagates_without_returning_stale_results(monkeypatch):
+    from nodeharbor.tasks import Cancelled
+    def job(operation, payload, control, timeout):
+        control.cancel(); control.check()
+    monkeypatch.setattr(search, 'network_job', job)
+    with pytest.raises(Cancelled):
+        search.discover('search-cloudflare', '', {}, TaskControl())
+
+
+def test_cloudflare_timeout_is_explicit_not_a_successful_empty_search(monkeypatch):
+    from nodeharbor.tasks import DeadlineExceeded
+    def job(*args, **kwargs): raise DeadlineExceeded('fixture')
+    monkeypatch.setattr(search, 'network_job', job)
+    result = search.discover('search-cloudflare', '', {}, TaskControl())
+    assert result['checked'] == 0 and result['incomplete'] and result['warnings']
+    assert not result['repositories']
 
 
 @pytest.mark.parametrize('query', ['', ' ', 'x' * 161, 'free\nv2ray'])
@@ -51,7 +111,7 @@ def test_tree_rechecks_visibility_and_escapes_branch(monkeypatch):
         return {'private': False} if len(calls) == 1 else {'tree': []}
     monkeypatch.setattr(search, 'api_json', api)
     assert search.perform({'mode': 'files', 'value': {'name': 'a/b', 'branch': 'feature/data'}})['files'] == []
-    assert calls == ['repos/a/b', 'repos/a/b/git/trees/feature%2Fdata']
+    assert calls == ['repos/a/b', 'repos/a/b/git/trees/feature%2Fdata', 'repos/a/b/readme']
     monkeypatch.setattr(search, 'api_json', lambda *a: {'private': True})
     assert search.perform({'mode': 'files', 'value': {'name': 'a/b', 'branch': 'main'}})['error'] == 'not_found'
 
@@ -111,7 +171,7 @@ def test_source_search_ui_add_dedup_and_cancel(tmp_path, monkeypatch):
         dialog.query.set('free v2ray')
         dialog.search(); pump()
         assert dialog.repo_tree.get_children() == ('0',)
-        assert not app.progress_counts.get()
+        assert app.progress_panel is None  # Search progress stays in the dialog/status bar.
         dialog.repo_tree.selection_set('0'); root.update()
         dialog.join_button.invoke(); root.update()
         assert len(app.custom_pools) == 1 and not app.custom_pools[0]['enabled']
@@ -127,7 +187,7 @@ def test_source_search_ui_add_dedup_and_cancel(tmp_path, monkeypatch):
                 control.check(); time.sleep(.01)
         monkeypatch.setattr('nodeharbor.source_search_dialog.discover', slow)
         dialog.search()
-        assert app.progress_cancel_button.cget('state') == 'normal'
+        assert app.cancel_button.cget('state') == 'normal'
         dialog.cancel_button.invoke(); pump()
         assert app.task_progress.status == 'cancelled'
         assert dialog.search_button.cget('state') == 'normal'

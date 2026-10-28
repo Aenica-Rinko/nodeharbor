@@ -90,6 +90,19 @@ def test_relocation_collision_keeps_original_configuration(tmp_path):
     assert paths.current() == old and load_settings(paths)['exports']['directory'] == ''
 
 
+def test_relocation_rejects_concurrent_settings_before_copy(tmp_path):
+    paths = configured(tmp_path)
+    original = load_settings(paths)
+    changed = load_settings(paths)
+    changed['subscription']['port'] = 8299
+    write_yaml(paths.config / 'settings.yaml', changed)
+    destination = tmp_path / 'new-output'
+    with pytest.raises(AppError, match='配置已被另一项操作修改'):
+        relocate_exports(paths, str(destination), original, expected=original)
+    assert load_settings(paths)['subscription']['port'] == 8299
+    assert not destination.exists()
+
+
 @pytest.mark.parametrize('name', ['config', 'data', 'runtime', 'src', 'scripts', '.release'])
 def test_protected_locations_are_rejected(tmp_path, name):
     paths = configured(tmp_path)

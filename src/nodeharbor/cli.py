@@ -18,9 +18,11 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="command", required=True)
     for command, help_text in [('acquire', '获取并检测节点，仅更新内部节点库'), ('verify-library', '重新检测内部节点库，不导出'),
                                ("refresh", "获取并验证导出免费节点"), ("verify", "重新检测并导出现有免费节点"),
-                               ("refresh-github", "从 GitHub 公开源获取节点并验证导出"),
+                               ("refresh-github", "从已启用的公开源获取节点并验证导出"),
                                ("export", "使用现有免费节点重新导出")]:
-        sub.add_parser(command, help=help_text)
+        command_parser = sub.add_parser(command, help=help_text)
+        if command in {'acquire', 'refresh', 'refresh-github'}:
+            command_parser.add_argument('--full-check', action='store_true', help='忽略历史检测复用和节点失败退避')
     for command, help_text in [("status", "查看真实状态与统计"), ("doctor", "检查依赖、配置、核心和导出"),
                                ("gui", "打开桌面窗口"),
                                ("init", "创建空白本地配置，保留已有设置")]:
@@ -34,7 +36,7 @@ def main(argv=None):
         if args.command == "init":
             created = initialize(paths)
             print("已初始化：" + "、".join(created) if created else "配置已存在，未覆盖任何文件。")
-            print('下一步：配置检测核心，从 GitHub 公开源获取节点。')
+            print('下一步：配置检测核心，从已启用的公开源获取节点。')
         elif args.command == "gui":
             from .desktop import main as desktop_main
             desktop_main(paths)
@@ -72,7 +74,7 @@ def main(argv=None):
                 print(f"订阅服务：http://127.0.0.1:{port}/free.yaml", flush=True)
                 server.serve_forever()
         else:
-            execute(paths, args.command, callback=print)
+            execute(paths, args.command, callback=print, full_check=getattr(args, 'full_check', False))
         return 0
     except KeyboardInterrupt:
         print("操作已停止。", file=sys.stderr); return 130

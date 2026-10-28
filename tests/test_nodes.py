@@ -43,6 +43,18 @@ def test_invalid_nodes_do_not_invalidate_subscription():
     assert len(normalize_nodes([node(port="bad"), node(), node(server="127.0.0.1")])) == 1
 
 
+def test_vmess_defaults_match_uri_input_without_overwriting_explicit_values():
+    raw = node(type='vmess')
+    defaults = normalize_nodes([raw, {**raw, 'alterId': 0, 'cipher': 'auto'}])
+    assert len(defaults) == 1
+    assert defaults[0]['alterId'] == 0
+    assert defaults[0]['cipher'] == 'auto'
+    assert 'alterId' not in raw
+    explicit = normalize_nodes([{**raw, 'alterId': 64, 'cipher': 'aes-128-gcm'}])[0]
+    assert explicit['alterId'] == 64
+    assert explicit['cipher'] == 'aes-128-gcm'
+
+
 def test_udp_is_not_tested_with_tcp(monkeypatch):
     monkeypatch.setattr("socket.getaddrinfo", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("TCP called")))
     assert tcp_ready({"type": "hysteria2"}, 1)

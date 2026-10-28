@@ -9,7 +9,10 @@ from ..fetcher import fetch_all
 from ..source_plan import summary_text, read_mapping
 from ..source_catalog import user_pools, validate_pools, add_pool, repository_of, remove_pool, replace_pool, update_catalog, pool_health
 from ..tasks import NETWORK_ERRORS
+from ..public_links import HOSTING_TYPES, pool_hosting
 from .common import BG, BLUE, MUTED, WHITE, display_time
+from .presentation import source_matches, needs_attention
+import webbrowser
 
 class SourcesPage:
     def show_sources(self):
@@ -20,50 +23,94 @@ class SourcesPage:
         cached = read_mapping(self.paths.data / 'state/public-sources.json')
         records = cached.get('sources', [])
         states = {s['name']: s for s in records if isinstance(s, dict) and isinstance(s.get('name'), str)} if isinstance(records, list) else {}
-        row = tk.Frame(self.main, bg=BG); row.pack(fill='x', pady=(0, 10))
         self.source_selection_hint = tk.StringVar()
-        tk.Label(row, textvariable=self.source_selection_hint, bg=BG, fg=BLUE).pack(side='left')
-        self.button(row, '搜索 GitHub 节点池', self.open_source_search, task=True).pack(side='right', padx=8)
-        table = tk.Frame(self.main, bg=WHITE); table.pack(fill='x')
-        self.sources_tree = ttk.Treeview(table, columns=('enabled', 'name', 'status', 'nodes', 'eligible', 'verified'), show='headings', height=6)
-        for key, title, width in [('enabled', '使用', 65), ('name', '公开仓库', 235), ('status', '上次下载状态', 135), ('nodes', '解析', 55), ('eligible', '送检', 55), ('verified', '可用', 55)]:
-            self.sources_tree.heading(key, text=title); self.sources_tree.column(key, width=width, minwidth=55, stretch=key in {'name', 'status'})
+        self.source_query = tk.StringVar()
+        self.source_filter = tk.StringVar(value='全部')
+        row = tk.Frame(self.main, bg=BG); row.pack(fill='x', pady=(0, 10))
+        self.button(self.header_actions, '搜索节点池', self.open_source_search, task=True).pack(side='left', padx=(0, 8))
+        self.button(self.header_actions, '获取节点', self.fetch_public_sources, True, True).pack(side='left')
+        self.label(row, '来源搜索', color=MUTED).pack(side='left', padx=(0, 8))
+        ttk.Entry(row, textvariable=self.source_query, width=18).pack(side='left', fill='x', expand=True, padx=(0, 8))
+        self.button(row, '更多选项', self.toggle_source_advanced).pack(side='right')
+        filters = tk.Frame(self.main, bg=BG); filters.pack(fill='x', pady=(0, 12))
+        category = ttk.Combobox(filters, textvariable=self.source_filter, values=('全部', '已启用', '未启用', '需处理'), state='readonly', width=9)
+        category.pack(side='left')
+        category.bind('<<ComboboxSelected>>', lambda _: self.fill_public_sources())
+        self.source_advanced = tk.Frame(self.main, bg=WHITE, padx=16, pady=12)
+        preset_row = tk.Frame(self.source_advanced, bg=WHITE); preset_row.pack(fill='x', pady=(0, 10))
+        self.label(preset_row, '内置方案', color=MUTED).pack(side='left', padx=(0, 8))
+        self.source_preset = tk.StringVar(value='自定义')
+        preset = ttk.Combobox(preset_row, textvariable=self.source_preset, values=tuple(PRESETS), state='readonly', width=10)
+        preset.pack(side='left')
+        preset.bind('<<ComboboxSelected>>', lambda _: self.choose_source_preset(self.source_preset.get()))
+        self.actions.append(preset)
+        if self.busy: preset.configure(state='disabled')
+        tk.Label(filters, textvariable=self.source_selection_hint, bg=BG, fg=MUTED).pack(side='right')
+        hosting_row = filters
+        self.label(hosting_row, '托管类型', color=MUTED).pack(side='left', padx=(12, 6))
+        self.source_hosting = tk.StringVar(value='全部')
+        hosting_box = ttk.Combobox(hosting_row, textvariable=self.source_hosting,
+                                  values=('全部', *HOSTING_TYPES, '待选择文件'), state='readonly', width=22)
+        hosting_box.pack(side='left')
+        hosting_box.bind('<<ComboboxSelected>>', lambda _: self.fill_public_sources())
+        self.flow(filters)
+        self.source_body = tk.Frame(self.main, bg=BG); self.source_body.pack(fill='both', expand=True)
+        self.source_body.grid_rowconfigure(0, weight=1)
+        self.source_body.grid_columnconfigure(0, weight=1)
+        table = tk.Frame(self.source_body, bg=WHITE)
+        self.source_table = table
+        table.grid(row=0, column=0, sticky='nsew')
+        self.sources_tree = ttk.Treeview(table, columns=('enabled', 'name', 'status', 'nodes', 'eligible', 'verified', 'hosting'),
+                                        displaycolumns=('enabled', 'name', 'hosting', 'status', 'verified'), show='headings', selectmode='browse', height=6)
+        for key, title, width in [('enabled', '启用', 65), ('name', '公开仓库', 220), ('status', '下载状态', 145), ('nodes', '解析', 55), ('eligible', '送检', 55), ('verified', '通过', 60)]:
+            self.sources_tree.heading(key, text=title); self.sources_tree.column(key, width=width, minwidth=50, stretch=key in {'name', 'status'})
+        self.sources_tree.heading('hosting', text='托管类型'); self.sources_tree.column('hosting', width=180, minwidth=100)
         scrollbar = ttk.Scrollbar(table, orient='vertical', command=self.sources_tree.yview)
-        self.sources_tree.configure(yscrollcommand=scrollbar.set)
-        self.sources_tree.pack(side='left', fill='both', expand=True); scrollbar.pack(side='right', fill='y')
-        self.sources_tree.bind('<Double-1>', lambda event: self.toggle_public_source())
-        self.sources_tree.bind('<<TreeviewSelect>>', lambda event: self.describe_public_source())
+        horizontal = ttk.Scrollbar(table, orient='horizontal', command=self.sources_tree.xview)
+        self.sources_tree.configure(yscrollcommand=scrollbar.set, xscrollcommand=horizontal.set)
+        table.grid_columnconfigure(0, weight=1)
+        table.grid_rowconfigure(0, weight=1)
+        self.sources_tree.grid(row=0, column=0, sticky='nsew'); scrollbar.grid(row=0, column=1, sticky='ns')
+        horizontal.grid(row=1, column=0, sticky='ew')
+        self.sources_tree.bind('<ButtonRelease-1>', self.source_click)
+        self.sources_tree.bind('<space>', lambda _: self.toggle_public_source())
+        self.sources_tree.bind('<<TreeviewSelect>>', lambda _: self.describe_public_source())
+        self.source_query.trace_add('write', lambda *_: self.fill_public_sources())
         self.public_source_description = tk.StringVar()
-        tk.Label(self.main, textvariable=self.public_source_description, wraplength=740, justify='left',
-                 anchor='w', bg=BG, fg=MUTED).pack(fill='x', pady=(8, 10))
-        buttons = tk.Frame(self.main, bg=BG); buttons.pack(fill='x', before=table, pady=(0, 10))
-        self.button(buttons, '启用 / 停用', self.toggle_public_source, task=True).pack(side='left', padx=(0, 8))
-        for title in PRESETS:
-            self.button(buttons, title, lambda title=title: self.choose_source_preset(title), task=True).pack(side='left', padx=(0, 6))
-        self.button(buttons, '重试下载连接', self.test_public_sources, task=True).pack(side='left')
-        maintenance = tk.Frame(self.main, bg=BG); maintenance.pack(fill='x', before=table, pady=(0, 10))
-        self.button(maintenance, '编辑自选订阅文件', self.edit_public_source, task=True).pack(side='left', padx=(0, 8))
-        self.button(maintenance, '删除自选来源', self.remove_public_source, task=True).pack(side='left')
-        self.button(self.main, '获取节点', self.fetch_public_sources, True, True).pack(anchor='w', before=table, pady=(0, 10))
-        self.label(self.main, f'内置 {len(GITHUB_POOLS)} 个来源，不代表 GitHub 总数。快速优先减少等待，均衡兼顾覆盖，全面适合较长时间检测。',
-                   color=MUTED, wraplength=740, justify='left').pack(anchor='w', pady=(10, 14))
-        self.label(self.main, '手动添加订阅文件（每行一个 GitHub raw / blob 地址，加入后默认停用）', bold=True).pack(anchor='w', pady=(0, 8))
-        self.extra_public_sources_text = tk.Text(self.main, height=3, wrap='word', relief='solid', borderwidth=1,
-                                               padx=8, pady=8, font=('Consolas', 10))
-        self.extra_public_sources_text.pack(fill='x')
-        self.button(self.main, '添加文件到节点池', self.add_manual_sources, task=True).pack(anchor='w', pady=(6, 0))
-        self.label(self.main, '解析数是来源内容，送检数是本轮实际分配的候选数，可用数需等待协议检测。来源可能重复；重试下载只测试下载，不改变已有导出。',
-                   color=MUTED, wraplength=740, justify='left').pack(anchor='w', pady=(8, 0))
+        self.source_detail = tk.Frame(self.source_body, bg=WHITE, padx=16, pady=12)
+        self.source_detail.grid(row=1, column=0, sticky='nsew', pady=(10, 0))
+        detail_actions = tk.Frame(self.source_detail, bg=WHITE); detail_actions.pack(fill='x')
+        self.label(detail_actions, '选择详情', bold=True).pack(side='left')
+        self.button(detail_actions, '打开仓库', self.open_selected_repository).pack(side='right')
+        self.source_menu = tk.Menu(self.source_detail, tearoff=False)
+        self.source_menu.add_command(label='启用 / 停用', command=self.toggle_public_source)
+        self.source_menu.add_command(label='编辑订阅文件', command=lambda: self.source_maintenance('edit'))
+        self.source_menu.add_command(label='删除自选来源', command=lambda: self.source_maintenance('remove'))
+        self.button(detail_actions, '维护来源 ▾', self.show_source_menu, task=True).pack(side='right', padx=8)
+        detail_body = tk.Frame(self.source_detail, bg=WHITE); detail_body.pack(fill='x', pady=(8, 0))
+        self.source_detail_text = tk.Text(detail_body, width=22, height=3, wrap='word', bg=WHITE, fg=MUTED, relief='flat', state='disabled')
+        detail_scroll = ttk.Scrollbar(detail_body, orient='vertical', command=self.source_detail_text.yview)
+        self.source_detail_text.configure(yscrollcommand=detail_scroll.set)
+        self.source_detail_text.pack(side='left', fill='both', expand=True); detail_scroll.pack(side='right', fill='y')
+        self.public_source_description.trace_add('write', lambda *_: self.update_source_detail())
+        tools = tk.Frame(self.source_advanced, bg=WHITE); tools.pack(fill='x', pady=(0, 10))
+        self.button(tools, '重试失败来源下载', self.retry_failed_sources, task=True).pack(side='left', padx=(0, 8))
+        self.flow(tools)
         self.source_budget_value = tk.StringVar(value=str(settings['fetch']['max_candidates']))
         self.per_source_budget_value = tk.StringVar(value=str(settings['fetch']['nodes_per_source']))
-        budget = tk.Frame(self.main, bg=BG); budget.pack(fill='x', before=table, pady=(0, 10))
-        self.label(budget, '单轮送检上限', color=MUTED).pack(side='left', padx=(0, 8))
-        limit_entry = ttk.Entry(budget, textvariable=self.source_budget_value, width=8)
-        limit_entry.pack(side='left'); limit_entry.bind('<FocusOut>', lambda _: self.persist_source_choices())
-        self.label(budget, '每源新增名额', color=MUTED).pack(side='left', padx=(14, 8))
-        per_source_entry = ttk.Entry(budget, textvariable=self.per_source_budget_value, width=8)
-        per_source_entry.pack(side='left'); per_source_entry.bind('<FocusOut>', lambda _: self.persist_source_choices())
-        self.label(self.main, summary_text(cached.get('summary', {})), color=BLUE, wraplength=740, justify='left').pack(anchor='w', pady=(6, 0))
+        budget = tk.Frame(self.source_advanced, bg=WHITE); budget.pack(fill='x')
+        for title, variable in [('单轮送检上限', self.source_budget_value), ('每源新增名额', self.per_source_budget_value)]:
+            self.label(budget, title, color=MUTED).pack(side='left', padx=(0, 8))
+            entry = ttk.Entry(budget, textvariable=variable, width=7); entry.pack(side='left', padx=(0, 12))
+            entry.bind('<FocusOut>', lambda _: self.persist_source_choices())
+        self.button(self.source_advanced, '测试全部启用来源下载', self.test_public_sources, task=True).pack(anchor='w', pady=8)
+        self.button(self.source_advanced, '获取并完整检测（忽略历史复用 / 退避）', lambda: self.fetch_public_sources(full_check=True), task=True).pack(anchor='w', pady=8)
+        self.label(self.source_advanced, '手动添加：每行一个 GitHub raw / blob 文件地址，新来源默认停用。', color=MUTED, wraplength=760, justify='left').pack(anchor='w')
+        self.extra_public_sources_text = tk.Text(self.source_advanced, height=3, wrap='word', relief='solid', borderwidth=1, padx=8, pady=8)
+        self.extra_public_sources_text.pack(fill='x', pady=8)
+        self.button(self.source_advanced, '添加文件到节点池', self.add_manual_sources, task=True).pack(anchor='w')
+        self.label(self.main, f'内置 {len(GITHUB_POOLS)} 个来源，不代表 GitHub 总数。下载成功后仍需检测节点；通过数不代表长期稳定性。',
+                   color=MUTED, wraplength=760, justify='left').pack(anchor='w', pady=(10, 0))
         self.cached_source_states = states
         self.source_health = read_mapping(self.paths.data / 'source-cache/health.json')
         self.fill_public_sources()
@@ -80,8 +127,10 @@ class SourcesPage:
         self.sources_tree.delete(*self.sources_tree.get_children())
         for index, (name, url) in enumerate(GITHUB_POOLS):
             state = self.cached_source_states.get(name, {})
-            self.sources_tree.insert('', 'end', iid=str(index), values=('✓' if name in self.selected_public_sources else '—', name,
-                        state.get('status', '尚未测试'), state.get('nodes', '—'), state.get('eligible', '—'), state.get('verified') if state.get('verified') is not None else '未检测'))
+            if self.source_hosting.get() not in ('全部', 'GitHub 文件'): continue
+            if not source_matches(name, name in self.selected_public_sources, state, self.source_query.get(), self.source_filter.get()): continue
+            self.sources_tree.insert('', 'end', iid=str(index), values=('☑' if name in self.selected_public_sources else '☐', name,
+                        state.get('status', '尚未测试'), state.get('nodes', '—'), state.get('eligible', '—'), state.get('verified') if state.get('verified') is not None else '未检测', 'GitHub 文件'))
         self.custom_source_states = {}
         health = dict(getattr(self, 'source_health', {}))
         for record in self.cached_source_states.values():
@@ -90,13 +139,20 @@ class SourcesPage:
             state, records = pool_health(pool, health)
             state['files'] = records
             self.custom_source_states[pool['name']] = state
+            kinds = pool_hosting(pool['urls']) or ['待选择文件']
+            if self.source_hosting.get() != '全部' and self.source_hosting.get() not in kinds: continue
+            if not source_matches(pool['name'], pool['enabled'], state, self.source_query.get(), self.source_filter.get(), bool(pool['urls'])): continue
             self.sources_tree.insert('', 'end', iid='pool-' + str(index), values=(
-                '✓' if pool['enabled'] else '—', pool['name'], state.get('status', '尚未测试' if pool['urls'] else '待选择订阅文件'),
-                state.get('nodes', '—'), state.get('eligible', '—'), state.get('verified') if state.get('verified') is not None else '未检测'))
+                '☑' if pool['enabled'] else '☐', pool['name'], state.get('status', '尚未测试' if pool['urls'] else '待选择订阅文件'),
+                state.get('nodes', '—'), state.get('eligible', '—'), state.get('verified') if state.get('verified') is not None else '未检测', ' / '.join(kinds)))
         selected = [item for item in selected if self.sources_tree.exists(item)]
         if selected: self.sources_tree.selection_set(selected)
         enabled = len(self.selected_public_sources) + sum(pool['enabled'] for pool in self.custom_pools)
-        self.source_selection_hint.set(f'启用 {enabled} / {len(GITHUB_POOLS) + len(self.custom_pools)} 个节点池')
+        self.source_selection_hint.set(f'启用 {enabled} / {len(GITHUB_POOLS) + len(self.custom_pools)} · 显示 {len(self.sources_tree.get_children())}')
+        for title, (names, limit, per_source) in PRESETS.items():
+            if set(names) == self.selected_public_sources and str(limit) == self.source_budget_value.get() and str(per_source) == self.per_source_budget_value.get():
+                self.source_preset.set(title); break
+        else: self.source_preset.set('自定义')
         if selected: self.describe_public_source()
         else: self.public_source_description.set('选择来源查看最近成功时间、失败原因和各文件状态。内置来源可停用；自选来源可编辑或删除。')
 
@@ -104,8 +160,9 @@ class SourcesPage:
         selected = self.sources_tree.selection()
         if not selected: return
         name = self.sources_tree.item(selected[0], 'values')[1]
-        state = self.cached_source_states.get(name, self.custom_source_states.get(name, {}))
+        state = self.custom_source_states.get(name, {}) if selected[0].startswith('pool-') else self.cached_source_states.get(name, {})
         text = 'https://github.com/' + name.split(' · ')[0] + ' · ' + source_note(name)
+        text += f"\n解析 {state.get('nodes', '—')} · 送检 {state.get('eligible', '—')} · 通过 {state.get('verified', '未检测')}"
         if state.get('unique') is not None: text += f"\n去重 {state['unique']} · 独有 {state.get('exclusive', 0)} · 送检 {state.get('eligible', 0)}"
         if state.get('last_verified_at'): text += ' · 最近协议检测：' + display_time(state['last_verified_at'])
         if name in LARGE_POOLS: text += ' · 大型来源，检测时间较长'
@@ -114,6 +171,8 @@ class SourcesPage:
             pool = self.custom_pools[int(selected[0][5:])]
             text += f" · 自选节点池，已选择 {len(pool['urls'])} 个订阅文件"
             for number, (url, record) in enumerate(zip(pool['urls'], state.get('files', [])), 1):
+                from ..public_links import link_kind
+                text += '\n来源类型：' + link_kind(url)
                 text += f"\n文件 {number}：{url}\n  {record.get('status', '尚未测试')} · 最近下载成功：{display_time(record.get('last_success'))}"
                 if record.get('failure_reason'): text += ' · 原因：' + str(record['failure_reason'])
                 if record.get('next_retry'): text += ' · 下次重试：' + display_time(record['next_retry'])
@@ -195,7 +254,7 @@ class SourcesPage:
         self.custom_pools = pools
         self.fill_public_sources()
         message = ('已加入 NodeHarbor 节点池，默认停用。选择订阅文件后，请到列表手动启用。' if added[0] else
-                   '该节点池已在列表中，已记住所选文件；启用状态保持不变。')
+                   '该节点池已在列表中；新增文件后会停用，请检查文件并手动启用。')
         self.state_text.set(message)
         return message
 
@@ -245,7 +304,7 @@ class SourcesPage:
         window.transient(self.root); window.grab_set()
         body = ttk.Frame(window, padding=18); body.pack(fill='both', expand=True)
         ttk.Label(body, text=pool['name']).pack(anchor='w')
-        ttk.Label(body, text='每行一个属于该仓库的 GitHub 文件地址。可以替换或移除失效文件。\n文件改变后自动停用，需回到列表手动启用；清空后保留来源供以后选择文件。', wraplength=680).pack(anchor='w', pady=10)
+        ttk.Label(body, text='每行一个该仓库的文件地址，或维护者在仓库说明中公开分享的 HTTPS 订阅链接。\n文件改变后自动停用，需回到列表手动启用；清空后保留来源供以后选择文件。', wraplength=680).pack(anchor='w', pady=10)
         editor = tk.Text(body, wrap='word', height=10)
         editor.pack(fill='both', expand=True); editor.insert('1.0', '\n'.join(pool['urls']))
         error = tk.StringVar()
@@ -274,6 +333,68 @@ class SourcesPage:
                 return fetch_all(settings, lambda line: self.events.put(('log', line)), control, public_only=True)
         self.start_task('test-sources', work, refresh=False)
 
-    def fetch_public_sources(self):
+    def fetch_public_sources(self, full_check=False):
         if self.busy or not self.persist_source_choices(): return
-        self.prepare_export('acquire')
+        if full_check: self.run('acquire', full_check=True)
+        else: self.prepare_export('acquire')
+
+    def toggle_source_advanced(self):
+        if self.source_advanced.winfo_manager(): self.source_advanced.pack_forget()
+        else: self.source_advanced.pack(before=self.source_body, fill='x', pady=(0, 12))
+
+    def update_source_detail(self):
+        self.source_detail_text.configure(state='normal')
+        self.source_detail_text.delete('1.0', 'end')
+        self.source_detail_text.insert('1.0', self.public_source_description.get())
+        self.source_detail_text.configure(state='disabled')
+
+    def source_click(self, event):
+        if self.sources_tree.identify_region(event.x, event.y) != 'cell': return
+        if self.sources_tree.identify_column(event.x) == '#1':
+            row = self.sources_tree.identify_row(event.y)
+            if row:
+                self.sources_tree.selection_set(row)
+                self.toggle_public_source()
+
+    def open_selected_repository(self):
+        selected = self.sources_tree.selection()
+        if not selected:
+            self.state_text.set('请先选择一个来源。'); return
+        item = selected[0]
+        name = self.custom_pools[int(item[5:])]['name'] if item.startswith('pool-') else GITHUB_POOLS[int(item)][0]
+        webbrowser.open('https://github.com/' + name.split(' · ')[0])
+
+    def show_source_menu(self):
+        selected = self.sources_tree.selection()
+        if not selected:
+            self.state_text.set('请先选择一个来源。'); return
+        custom = selected[0].startswith('pool-')
+        for index in (1, 2): self.source_menu.entryconfigure(index, state='normal' if custom else 'disabled')
+        try: self.source_menu.tk_popup(self.root.winfo_pointerx(), self.root.winfo_pointery())
+        finally: self.source_menu.grab_release()
+
+    def source_maintenance(self, action):
+        try:
+            if action == 'edit': self.edit_public_source()
+            else: self.remove_public_source()
+        except (AppError, OSError) as error:
+            messagebox.showerror('操作未完成', str(error) if isinstance(error, AppError) else '无法更新来源，请检查目录权限。', parent=self.root)
+
+    def retry_failed_sources(self):
+        if self.busy: return
+        # Use file health keys, not displayed repository labels: custom pools may
+        # contain a mix of failed and successful files.
+        settings = load_settings(self.paths)
+        from ..source_catalog import enabled_urls
+        from ..public_sources import selected_pools
+        from ..source_plan import source_key
+        health = read_mapping(self.paths.data / 'source-cache/health.json')
+        urls = [url for _, url in selected_pools(settings['fetch'])] + enabled_urls(settings['fetch'])
+        keys = {source_key(url) for url in urls if needs_attention(health.get(source_key(url), {}))}
+        if not keys:
+            self.state_text.set('当前启用的来源没有下载失败记录。需选择文件或协议检测失败的问题，请查看来源详情。'); return
+        settings['fetch'].update(_cache_folder=str(self.paths.data / 'source-cache'), _force=True, _only_source_keys=sorted(keys))
+        def work(control):
+            with app_lock(self.paths):
+                return fetch_all(settings, lambda line: self.events.put(('log', line)), control, public_only=True)
+        self.start_task('test-sources', work)

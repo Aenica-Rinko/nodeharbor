@@ -55,12 +55,14 @@ def fair_candidates(batches, limit, per_source, preferred=None):
 def verification_sources(report, selected, alive, checks):
     eligible, passed = {identity(n) for n in selected}, {identity(n) for n in alive}
     # Quality results exist only for nodes actually sent to protocol probes.
-    tested = set(checks.get('quality', {}))
+    reused = set(checks.get('reused_ids', []))
+    tested = set(checks.get('quality', {})) - reused
     for source in report.get('details', []):
         keys = set(source.get('node_ids', []))
-        source.update(eligible=len(keys & eligible), tested=len(keys & tested), verified=len(keys & passed))
+        source.update(eligible=len(keys & eligible), tested=len(keys & tested), verified=len(keys & passed), reused=len(keys & reused))
         if source['eligible']:
-            source.update(last_eligible=source['eligible'], last_verified=source['verified'], last_verified_at=time.time())
+            source.update(last_eligible=source['eligible'], last_verified=source['verified'])
+            if keys & (set(checks.get('outcomes', {})) | tested): source['last_verified_at'] = time.time()
     return report
 
 
@@ -84,6 +86,9 @@ def summary_text(summary):
         prefix = (f"新下载 {summary.get('downloaded', 0)} 源 · 缓存 {summary.get('cache', 0)} 源 · "
                   f"旧缓存 {summary.get('stale_cache', 0)} 源 · 未取得数据 {summary.get('failed', 0)} 源。")
     text = prefix + f" 本轮送检 {summary.get('selected', 0)} 个（历史 {summary.get('history_candidates', 0)} 个）"
-    if 'passed' in summary: text += f"，通过 {summary['passed']} 个，多次通过 {summary.get('stable', 0)} 个。"
+    if 'passed' in summary:
+        if 'fresh_passed' in summary:
+            text += f"，本轮通过 {summary['fresh_passed']} 个，沿用历史 {summary.get('reused', 0)} 个，失败退避 {summary.get('node_deferred', 0)} 个。"
+        else: text += f"，通过 {summary['passed']} 个，多次通过 {summary.get('stable', 0)} 个。"
     if summary.get('not_selected'): text += f" 另有 {summary['not_selected']} 个来源节点未送检，可提高名额后再获取。"
     return text

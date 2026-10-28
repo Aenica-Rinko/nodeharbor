@@ -135,6 +135,7 @@ def verify_nodes(core, nodes, options, log, control=None):
 def _verify_nodes(core, nodes, options, log, control, pool):
     log(f"预检查 {len(nodes)} 个候选节点；UDP 协议直接进入核心检测")
     completed, tcp_passed, udp_skipped = 0, 0, 0
+    checked_at = {}
     lock = threading.Lock()
     control.emit('precheck', 0, len(nodes), '检查服务器可连接性；UDP 节点使用协议检测', candidates=len(nodes))
     def precheck(node):
@@ -152,12 +153,14 @@ def _verify_nodes(core, nodes, options, log, control, pool):
             return False
         finally:
             with lock:
+                checked_at[identity(node)] = time.time()
                 completed += 1
                 if node['type'] in UDP_PROTOCOLS: udp_skipped += 1
                 elif ready: tcp_passed += 1
                 control.emit('precheck', completed, len(nodes), '服务器连通性预检', candidates=len(nodes),
                              tcp_passed=tcp_passed, udp_skipped=udp_skipped)
     flags = parallel_map(precheck, nodes, options["workers"], control)
+    outcomes = {identity(p): False for p, ok in zip(nodes, flags) if not ok}
     candidates = [p for p, ok in zip(nodes, flags) if ok]
     log(f"{len(candidates)} 个节点进入 Mihomo 协议检测")
     alive, delays, unsupported, tested, stable = [], {}, 0, 0, 0
@@ -195,6 +198,8 @@ def _verify_nodes(core, nodes, options, log, control, pool):
                 except AppError: control.check()
                 finally:
                     with lock:
+                        outcomes[identity(batch[index])] = passed
+                        checked_at[identity(batch[index])] = time.time()
                         protocol_done += 1
                         tested += 1
                         if passed: batch_passed += 1
@@ -210,5 +215,5 @@ def _verify_nodes(core, nodes, options, log, control, pool):
         log(f"已完成 {min(offset + size, len(candidates))}/{len(candidates)}，通过 {len(alive)} 个")
     return alive, {"candidates": len(nodes), 'tcp_passed': tcp_passed, 'udp_skipped': udp_skipped,
                    "protocol_tested": tested, "unsupported": unsupported, 'stable': stable,
-                   "verified": len(alive), "delays_ms": delays, 'quality': quality,
+                   "verified": len(alive), "delays_ms": delays, 'quality': quality, 'outcomes': outcomes, 'checked_at': checked_at,
                    'test_urls': [options['test_url'], options.get('https_test_url', 'https://www.gstatic.com/generate_204')]}

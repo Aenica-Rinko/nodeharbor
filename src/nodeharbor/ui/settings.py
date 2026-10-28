@@ -5,7 +5,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from ..client_exports import CLIENTS
 from ..config import find_core, core_kind, validate_core, load_settings, validate_settings
-from ..storage import AppError, write_yaml
+from ..storage import AppError, app_lock, write_yaml
 from ..public_sources import selected_pools
 from ..source_catalog import enabled_urls
 from .common import BG, INK, MUTED, WHITE, open_help, open_path
@@ -13,10 +13,11 @@ from .common import BG, INK, MUTED, WHITE, open_help, open_path
 class SettingsPage:
     def show_settings(self):
         settings = load_settings(self.paths)
+        self.settings_snapshot = deepcopy(settings)
         panel = tk.Frame(self.main, bg=WHITE, padx=24, pady=24); panel.pack(fill="x")
         header = tk.Frame(panel, bg=WHITE); header.pack(fill='x', pady=(0, 8))
         self.label(header, '用于检测节点的客户端', bold=True).pack(side='left')
-        self.button(header, '保存设置', self.save_settings, True, True).pack(side='right')
+        self.button(self.header_actions, '保存设置', self.save_settings, True, True).pack(side='right')
         self.core_client_value = tk.StringVar(value=settings['verification']['core_client'])
         selector = ttk.Combobox(panel, textvariable=self.core_client_value, values=CLIENTS, state='readonly', width=22)
         selector.pack(anchor='w', pady=(0, 10))
@@ -42,23 +43,25 @@ class SettingsPage:
         selector.bind('<<ComboboxSelected>>', self.change_core_client)
         self.v2rayn_core_value.trace_add('write', lambda *_: self.update_core_hint())
         self.update_core_hint()
-        self.label(panel, "本地订阅端口", bold=True).pack(anchor="w", pady=(0, 8))
-        self.port_value = tk.StringVar(value=str(settings["subscription"]["port"]))
-        ttk.Entry(panel, textvariable=self.port_value, width=15).pack(anchor="w")
+        panel = self.settings_section('下载与来源')
         chosen_count = len(selected_pools(settings['fetch'])) + len(enabled_urls(settings['fetch']))
         self.label(panel, f'当前选择 {chosen_count} 个公开来源；获取后去重和检测。可在“公开源”页选择或添加，打开应用不会自动联网。',
                    color=MUTED, wraplength=700, justify='left').pack(anchor='w')
-        self.button(panel, '管理 GitHub 公开源', lambda: self.show('sources')).pack(anchor='w', pady=(6, 0))
+        self.button(panel, '管理公开源', lambda: self.show('sources')).pack(anchor='w', pady=(6, 0))
         self.label(panel, '下载代理（可选，例如 http://127.0.0.1:7890）', bold=True).pack(anchor='w', pady=(14, 8))
         self.download_proxy_value = tk.StringVar(value=settings['fetch']['proxy'])
         ttk.Entry(panel, textvariable=self.download_proxy_value).pack(fill='x')
-        self.label(panel, '仅用于下载订阅；留空使用环境 / 系统代理。网络受限时可使用正在运行的客户端代理端口。',
+        self.label(panel, '用于公开源搜索和订阅下载；留空使用环境 / 系统代理。网络受限时可使用正在运行的客户端代理端口。',
                    color=MUTED, wraplength=700, justify='left').pack(anchor='w', pady=(6, 0))
         self.auto_local_proxy_value = tk.BooleanVar(value=settings['fetch']['auto_local_proxy'])
         tk.Checkbutton(panel, text='公开源连接失败时，自动尝试本机客户端的 HTTP 代理', variable=self.auto_local_proxy_value,
                        bg=WHITE, activebackground=WHITE, fg=INK).pack(anchor='w', pady=(8, 0))
-        self.label(panel, '只用于 GitHub 公开源，不修改系统代理。明确填写下载代理时以填写值为准；所有节点来源统一在“公开源”页管理。',
+        self.label(panel, '仅影响本应用下载请求，不修改系统代理。明确填写下载代理时以填写值为准。',
                    color=MUTED, wraplength=700, justify='left').pack(anchor='w', pady=(4, 0))
+        panel = self.settings_section('导出与本地订阅')
+        self.label(panel, "本地订阅端口", bold=True).pack(anchor="w", pady=(0, 8))
+        self.port_value = tk.StringVar(value=str(settings["subscription"]["port"]))
+        ttk.Entry(panel, textvariable=self.port_value, width=15).pack(anchor="w")
         self.label(panel, 'Mihomo 独立运行的代理端口', bold=True).pack(anchor='w', pady=(18, 8))
         self.mihomo_port_value = tk.StringVar(value=str(settings['exports']['mihomo_port']))
         ttk.Entry(panel, textvariable=self.mihomo_port_value, width=15).pack(anchor='w')
@@ -70,7 +73,6 @@ class SettingsPage:
         self.button(row, '选择文件夹', self.pick_export_directory, task=True).pack(side='left', padx=(8, 0))
         self.label(panel, '自动按 Mihomo、clash-verge-Rev、v2rayN 分文件夹保存。更换目录时会复制已有导出，原文件保留。',
                    color=MUTED, wraplength=700, justify='left').pack(anchor='w', pady=(6, 0))
-        self.button(panel, "保存设置", self.save_settings, True, True).pack(anchor="w", pady=(18, 0))
         self.label(self.main, "更多配置", 13, bold=True).pack(anchor="w", pady=(24, 14))
         self.show_downloads(self.main)
         row = tk.Frame(self.main, bg=BG); row.pack(anchor="w")
@@ -78,6 +80,12 @@ class SettingsPage:
         self.button(row, "使用说明", lambda: open_help(self.paths)).pack(side="left")
         self.button(self.main, '导出脱敏诊断报告', self.export_diagnostics, task=True).pack(anchor='w', pady=(12, 12))
         self.show_subscription_tools()
+
+    def settings_section(self, title):
+        panel = tk.Frame(self.main, bg=WHITE, padx=24, pady=20)
+        panel.pack(fill='x', pady=(12, 0))
+        self.label(panel, title, 13, bold=True).pack(anchor='w', pady=(0, 12))
+        return panel
 
     def pick_core(self):
         chosen = filedialog.askopenfilename(title='选择客户端主程序或对应的核心文件', filetypes=[("可执行程序", "*.exe"), ("所有文件", "*")])
@@ -127,7 +135,10 @@ class SettingsPage:
             core = self.core_path.get().strip()
             if core and not (Path(core) if Path(core).is_absolute() else self.paths.root / core).is_file():
                 raise AppError("选择的核心文件不存在。")
-            settings = deepcopy(load_settings(self.paths))
+            original = load_settings(self.paths)
+            if original != self.settings_snapshot:
+                raise AppError('配置已被另一项操作修改，请重新打开设置后再保存。')
+            settings = deepcopy(original)
             if self.core_client_value.get() == 'Mihomo': settings["verification"]["mihomo_path"] = core
             self.core_profiles[self.editing_core_client] = core
             settings['verification'].update(core_client=self.core_client_value.get(), core_paths=dict(self.core_profiles),
@@ -148,10 +159,14 @@ class SettingsPage:
             directory = self.export_directory_value.get().strip()
             if directory != settings['exports']['directory']:
                 from ..export_locations import relocate_exports
-                relocate_exports(self.paths, directory, settings)
+                relocate_exports(self.paths, directory, settings, expected=original)
             else:
-                write_yaml(self.paths.config / "settings.yaml", settings)
+                with app_lock(self.paths):
+                    if load_settings(self.paths) != original:
+                        raise AppError('配置已被另一项操作修改，请重新打开设置后再保存。')
+                    write_yaml(self.paths.config / "settings.yaml", settings)
             self.export_client = self.core_client_value.get()
+            self.settings_snapshot = load_settings(self.paths)
             self.state_text.set("设置已保存")
         except ValueError: messagebox.showerror("端口无效", "请输入 1024–65535 的整数。", parent=self.root)
         except (AppError, OSError) as exc:

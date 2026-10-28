@@ -4,6 +4,7 @@ from copy import deepcopy
 from urllib.parse import urlsplit
 
 from .public_sources import GITHUB_POOLS, github_file_url
+from .public_links import subscription_url, external_link
 from .storage import AppError
 
 
@@ -24,8 +25,8 @@ def validate_pools(value):
             raise AppError('节点池分支或启用状态无效。')
         if not isinstance(urls, list) or any(not isinstance(url, str) for url in urls):
             raise AppError('节点池订阅文件必须是地址列表。')
-        urls = list(dict.fromkeys(github_file_url(url) for url in urls))
-        if any(repository_of(url).casefold() != name.casefold() for url in urls):
+        urls = list(dict.fromkeys(subscription_url(url) for url in urls))
+        if any(not external_link(url) and repository_of(url).casefold() != name.casefold() for url in urls):
             raise AppError('订阅文件必须属于对应的 GitHub 仓库。')
         if enabled and not urls: raise AppError('请先为节点池选择订阅文件，再启用。')
         seen.add(name.casefold())
@@ -61,7 +62,9 @@ def add_pool(options, repository, urls=()):
     if added:
         pool = dict(name=name, branch=repository.get('branch', 'main'), enabled=False, urls=[])
         pools.append(pool)
-    pool['urls'] = list(dict.fromkeys([*pool['urls'], *urls]))
+    new_urls = list(dict.fromkeys([*pool['urls'], *urls]))
+    if new_urls != pool['urls']: pool['enabled'] = False
+    pool['urls'] = new_urls
     return validate_pools(pools), added
 
 
@@ -80,7 +83,7 @@ def replace_pool(options, name, urls, expected=None):
     if pool is None: raise AppError('该自选来源已不存在，请刷新列表。')
     if expected is not None and pool != expected:
         raise AppError('该来源已被其他操作修改，请关闭窗口后重新打开。')
-    urls = list(dict.fromkeys(github_file_url(url) for url in urls))
+    urls = list(dict.fromkeys(subscription_url(url) for url in urls))
     if urls != pool['urls']: pool.update(urls=urls, enabled=False)
     return validate_pools(pools)
 

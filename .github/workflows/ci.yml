@@ -23,6 +23,9 @@ jobs:
         run: python -B -m pytest -q -rs -p no:cacheprovider
       - if: runner.os == 'Linux'
         run: xvfb-run -a python -B -m pytest -q -rs -p no:cacheprovider
+      - run: python -B scripts/windows/check_clients.py --format-only
+      - if: runner.os == 'Windows' && matrix.python == '3.13'
+        run: python -B scripts/windows/check_ui.py
       - run: python -m build
       - run: python scripts/release.py --check-artifacts dist
       - if: runner.os == 'Windows' && matrix.python == '3.13'

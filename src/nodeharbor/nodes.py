@@ -49,7 +49,9 @@ def normalize_nodes(nodes, strict=False):
             if p["type"] in {"vless", "vmess", "tuic"} and not p.get("uuid"): raise ValueError("缺少 UUID")
             if p["type"] in {"ss", "trojan", "hysteria2", "tuic", "anytls"} and not p.get("password"): raise ValueError("缺少密码")
             if p["type"] == "ss" and not p.get("cipher"): raise ValueError("缺少加密方式")
-            if p["type"] == "vmess": p.setdefault("cipher", "auto")
+            if p["type"] == "vmess":
+                p.setdefault("cipher", "auto")
+                p.setdefault("alterId", 0)
             key = identity(p)
             if key in seen: continue
             seen.add(key)

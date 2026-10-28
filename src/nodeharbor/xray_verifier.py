@@ -150,6 +150,7 @@ def _verify_xray(core, nodes, options, log, control, pool):
         try: outbound(node); supported.append(node)
         except (Unsupported, KeyError, TypeError, ValueError): reasons['Xray 适配不支持该协议或参数'] += 1
     done, tcp_passed = 0, 0
+    checked_at = {}
     import threading
     lock = threading.Lock()
     control.emit('precheck', 0, len(supported), 'Xray 协议适配及 TCP 预检', candidates=len(nodes), unsupported=sum(reasons.values()))
@@ -163,10 +164,12 @@ def _verify_xray(core, nodes, options, log, control, pool):
         except AppError: control.check(); return False
         finally:
             with lock:
+                checked_at[identity(node)] = time.time()
                 done += 1
                 if ready: tcp_passed += 1
                 control.emit('precheck', done, len(supported), '检查服务器可连接性', unsupported=sum(reasons.values()), tcp_passed=tcp_passed)
     flags = parallel_map(precheck, supported, options['workers'], control)
+    outcomes = {identity(n): False for n, ok in zip(supported, flags) if not ok}
     candidates = [n for n, flag in zip(supported, flags) if flag]
     alive, delays, completed, tested, stable = [], {}, 0, 0, 0
     quality = {}
@@ -196,6 +199,8 @@ def _verify_xray(core, nodes, options, log, control, pool):
                 except AppError: control.check(); return None
                 finally:
                     with lock:
+                        outcomes[identity(batch[index])] = passed
+                        checked_at[identity(batch[index])] = time.time()
                         completed += 1
                         tested += 1
                         if passed: batch_passed += 1
@@ -208,4 +213,4 @@ def _verify_xray(core, nodes, options, log, control, pool):
         control.emit('protocol', completed, len(candidates), '当前批次检测完成', passed=len(alive), unsupported=sum(reasons.values()), tested=tested, stable=stable)
         log(f'Xray 已检测 {completed}/{len(candidates)}，通过 {len(alive)} 个')
     return alive, {'candidates': len(nodes), 'tcp_passed': tcp_passed, 'protocol_tested': tested, 'unsupported': sum(reasons.values()),
-                    'skipped_reasons': dict(reasons), 'verified': len(alive), 'delays_ms': delays, 'core': 'xray', 'stable': stable, 'quality': quality}
+                    'skipped_reasons': dict(reasons), 'verified': len(alive), 'delays_ms': delays, 'core': 'xray', 'stable': stable, 'quality': quality, 'outcomes': outcomes, 'checked_at': checked_at}

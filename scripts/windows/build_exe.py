@@ -101,10 +101,14 @@ def build():
     output = ROOT / '.release' / f'windows-{version}-{uuid.uuid4().hex[:8]}'
     work = output / 'work'; work.mkdir(parents=True)
     icon = work / 'NodeHarbor.ico'; make_icon(icon)
-    numbers = tuple(int(n) for n in version.split('.')) + (0,)
+    from packaging.version import Version
+    parsed_version = Version(version)
+    numbers = (parsed_version.major, parsed_version.minor, parsed_version.micro,
+               parsed_version.pre[1] if parsed_version.pre else 0)
+    version_flags = 0x2 if parsed_version.is_prerelease else 0
     version_file = work / 'version.txt'
     version_file.write_text(f'''VSVersionInfo(
-        ffi=FixedFileInfo(filevers={numbers!r}, prodvers={numbers!r}, mask=0x3f, flags=0,
+        ffi=FixedFileInfo(filevers={numbers!r}, prodvers={numbers!r}, mask=0x3f, flags={version_flags},
                          OS=0x40004, fileType=0x1, subtype=0, date=(0,0)),
         kids=[StringFileInfo([StringTable('040904B0', [
             StringStruct('CompanyName', 'NodeHarbor contributors'),

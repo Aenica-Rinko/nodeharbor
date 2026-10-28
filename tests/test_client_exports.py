@@ -126,10 +126,12 @@ def test_public_pools_deduplicate_and_isolate_failed_sources(monkeypatch):
 
 
 def test_download_environment_proxy_does_not_enable_netrc(monkeypatch):
+    monkeypatch.setattr('nodeharbor.fetcher.check_public_host', lambda url: url)
     from unittest.mock import MagicMock
     from nodeharbor.fetcher import download_single
     session = MagicMock(); session.__enter__.return_value = session
     response = session.get.return_value.__enter__.return_value
+    response.status_code = 200
     response.iter_content.return_value = [b'proxies: []']
     monkeypatch.setattr('nodeharbor.fetcher.requests.Session', lambda: session)
     monkeypatch.setattr('nodeharbor.fetcher.requests.utils.get_environ_proxies', lambda url: {'https': 'http://proxy.example.com'})
@@ -160,8 +162,8 @@ def test_simple_export_page_and_optional_address_tools(tmp_path, monkeypatch):
     try:
         app.show('subscriptions')
         assert not any(isinstance(widget, ttk.Combobox) for widget in widgets(app.main))
-        assert [widget.cget('text') for widget in widgets(app.main) if isinstance(widget, tk.Button)] == [
-            '从 GitHub 公开源获取节点', '生成 / 更新导出文件']
+        assert [widget.cget('text') for widget in app.export_action_buttons] == [
+            '获取节点', '生成 / 更新导出文件']
         publish(paths, [node()], {})
         app.show('subscriptions')
         assert (paths.client_exports('v2rayN') / 'free.txt').read_text(encoding='utf-8').startswith('ss://')

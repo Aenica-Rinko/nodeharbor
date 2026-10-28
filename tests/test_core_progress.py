@@ -163,10 +163,12 @@ def test_desktop_core_profiles_downloads_and_live_progress(tmp_path, monkeypatch
         app.show('overview'); app.start_task('refresh-github', job)
         deadline = time.monotonic() + 3
         while app.task_progress.stage != 'download' and time.monotonic() < deadline: root.update(); time.sleep(0.01)
-        assert app.busy and app.progress_panel.winfo_exists()
+        assert app.busy and app.progress_panel is None
         assert app.task_progress.counters['parsed'] == 42
         app.show('subscriptions'); root.update()
-        assert app.task_progress.stage == 'download' and app.progress_bar['maximum'] == 3
+        assert app.task_progress.stage == 'download' and app.footer_progress['maximum'] == 3
+        app.show('logs'); root.update()
+        assert app.progress_panel.winfo_exists() and app.progress_bar['maximum'] == 3
         release.set()
         deadline = time.monotonic() + 3
         while app.busy and time.monotonic() < deadline: root.update(); time.sleep(0.01)

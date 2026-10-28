@@ -107,7 +107,7 @@ def client_export_transaction(root, generation, control=None):
         raise
 
 
-def relocate_exports(paths, directory, settings=None):
+def relocate_exports(paths, directory, settings=None, expected=None):
     """Copy history, prepare client files, then persist the new local setting."""
     from .config import load_settings
     settings = deepcopy(settings if settings is not None else load_settings(paths))
@@ -117,6 +117,8 @@ def relocate_exports(paths, directory, settings=None):
     target = destination if destination == paths.data / 'exports' else destination / '.history'
     if linked(destination) or linked(target): raise AppError('导出目录不能是符号链接或目录联接。')
     with app_lock(paths), ExitStack() as locks:
+        if expected is not None and load_settings(paths) != expected:
+            raise AppError('配置已被另一项操作修改，请重新打开设置后再保存。')
         for lock in sorted({source.resolve() / 'exports.lock', target.resolve() / 'exports.lock'}, key=str):
             locks.enter_context(file_lock(lock))
         copied = 0

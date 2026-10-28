@@ -13,7 +13,8 @@ from .storage import AppError, write_json
 from .tasks import NETWORK_ERRORS
 
 SUMMARY_KEYS = ('sources', 'downloaded', 'cache', 'stale_cache', 'failed', 'deferred',
-                'parsed', 'unique', 'selected', 'not_selected', 'passed', 'stable')
+                'parsed', 'unique', 'selected', 'not_selected', 'passed', 'stable',
+                'reused', 'node_deferred', 'fresh_passed', 'checked_this_run')
 SOURCE_KEYS = ('nodes', 'eligible', 'verified', 'failures', 'elapsed_seconds')
 ACTIONS = {'refresh', 'refresh-github', 'verify', 'acquire', 'verify-library', 'export',
            'test-sources', 'search-sources', 'check-core'}

@@ -17,6 +17,7 @@ from .storage import AppError, write_json, file_lock
 from .tasks import Cancelled, TaskControl, network_job, parallel_map, NetworkFailure, DeadlineExceeded, NetworkPool
 from .source_plan import source_key, priority, read_mapping, fair_candidates, nonnegative
 from . import __version__
+from .public_links import external_link, check_public_host, link_kind
 
 
 class SourcesUnavailable(AppError):
@@ -105,7 +106,7 @@ def download_with_report(url, options):
     attempts = []
     # Try working local clients before repeatedly waiting for a blocked raw/CDN host.
     for candidate, route in [(candidate, route) for candidate in urls for route in routes]:
-        channel = 'GitHub 原始文件' if candidate in originals else 'GitHub API' if candidate.startswith('https://api.github.com/') else '公开 CDN 镜像'
+        channel = ('外部公开订阅' if external_link(candidate) else 'GitHub 原始文件') if candidate in originals else 'GitHub API' if candidate.startswith('https://api.github.com/') else '公开 CDN 镜像'
         entry = {'channel': channel, 'route': proxy_label(route)}
         try:
             bounded = dict(options)
@@ -145,6 +146,10 @@ def download_with_report(url, options):
 
 
 def download_single(url, options, retries=None, proxies=None):
+    # Configured public subscriptions are HTTPS-only. Internal installation
+    # diagnostics also exercise this transport with an HTTP loopback fixture.
+    external = url.startswith('https://') and external_link(url) and not url.startswith(('https://api.github.com/', 'https://cdn.jsdelivr.net/'))
+    if external: check_public_host(url)
     if options.get("github_mirror") and url.startswith("https://raw.githubusercontent.com/"):
         url = options["github_mirror"].rstrip("/") + "/" + url
     with requests.Session() as session:
@@ -160,7 +165,10 @@ def download_single(url, options, retries=None, proxies=None):
         elif cached.get('modified'): headers['If-Modified-Since'] = cached['modified']
         if url.startswith('https://api.github.com/'): headers['Accept'] = 'application/vnd.github.raw+json'
         with api_gate(url, options), session.get(url, timeout=options["timeout_seconds"], stream=True,
-                         headers=headers) as response:
+                         headers=headers, allow_redirects=not external) as response:
+            if external and 300 <= response.status_code < 400 and response.status_code != 304:
+                # Do not follow unreviewed redirects to different sources or local services.
+                raise AppError('外部订阅发生重定向，请使用维护者公开的最终 HTTPS 地址。')
             response.raise_for_status()
             info = options.get('_response_info')
             if response.status_code == 304 and cached:
@@ -194,12 +202,18 @@ def fetch_all(settings, log, control=None, public_only=False):
     control = control or TaskControl()
     options = settings['fetch']
     pools = {url: name for name, url in selected_pools(options)}
-    from .source_catalog import enabled_urls
-    for index, url in enumerate(enabled_urls(options), 1):
-        from urllib.parse import urlsplit
-        owner, repository, *_ = urlsplit(url).path.strip('/').split('/')
-        pools.setdefault(url, owner + '/' + repository + f' · 自选 {index}')
+    from .source_catalog import user_pools
+    index = 0
+    for entry in user_pools(options):
+        if not entry['enabled']: continue
+        for url in entry['urls']:
+            index += 1
+            pools.setdefault(url, entry['name'] + f' · 自选 {index}')
     if not pools: raise AppError('没有启用公开来源，请在“公开源”页选择或添加至少一个来源。')
+    if '_only_source_keys' in options:
+        selected_keys = set(options['_only_source_keys'])
+        pools = {url: name for url, name in pools.items() if source_key(url) in selected_keys}
+        if not pools: raise AppError('没有需要重试的已启用来源。')
     health_file = Path(options['_cache_folder']) / 'health.json' if options.get('_cache_folder') else None
     health = read_mapping(health_file) if health_file else {}
     urls = sorted(pools, key=lambda url: priority(health.get(source_key(url), {})))
@@ -211,7 +225,7 @@ def fetch_all(settings, log, control=None, public_only=False):
         for key in ('failures', 'next_retry', 'last_success', 'last_verified_at', 'last_eligible', 'last_verified', 'elapsed_seconds'):
             if key in previous: previous[key] = nonnegative(previous[key])
         previous['failures'] = int(previous.get('failures', 0))
-        source_states.append(dict(previous, key=source_key(url), name=pools[url], status='等待下载',
+        source_states.append(dict(previous, key=source_key(url), name=pools[url], hosting=link_kind(url), status='等待下载',
                                   nodes=0, verified=None, eligible=0, tested=None, node_ids=[], attempts=[],
                                   cached=False, stale=False, deferred=False))
     completed, parsed = 0, 0
@@ -281,7 +295,7 @@ def fetch_all(settings, log, control=None, public_only=False):
                         failures = source.get('failures', 0) + 1
                         retry = max([a.get('retry_after', 0) for a in source['attempts']] + [min(3600, 60 * 2 ** min(failures, 6))])
                         source.update(failures=failures, next_retry=time.time() + retry)
-                    log(f'GitHub · {source["name"]}：{source["status"]} · {len(found)} 个节点')
+                    log(f'{source["hosting"]} · {source["name"]}：{source["status"]} · {len(found)} 个节点')
                     emit('公开来源获取进度')
         batches = parallel_map(fetch, enumerate(urls), workers, control)
     batches = [normalize_nodes(batch) for batch in batches]
@@ -289,13 +303,16 @@ def fetch_all(settings, log, control=None, public_only=False):
     selected, contributions = fair_candidates(batches, options.get('_source_budget', options.get('max_candidates', 1200)),
                                               options.get('nodes_per_source', 200), options.get('_preferred_nodes'))
     selected_ids = {identity(node) for node in selected}
-    provenance = {}
+    provenance, hosting = {}, {}
     for index, (url, batch) in enumerate(zip(urls, batches)):
         source = source_states[index]; keys = {identity(node) for node in batch}
         chosen = keys & selected_ids
         source.update(node_ids=sorted(chosen), unique=len(keys), exclusive=sum(frequencies[k] == 1 for k in keys),
                       eligible=len(chosen), selected_own=contributions[index])
-        for key in chosen: provenance.setdefault(key, []).append(source['name'])
+        for key in chosen:
+            provenance.setdefault(key, []).append(source['name'])
+            kinds = hosting.setdefault(key, [])
+            if source['hosting'] not in kinds: kinds.append(source['hosting'])
         health[source_key(url)] = source
     successes = sum(bool(batch) for batch in batches)
     summary = {'sources': len(urls), 'downloaded': sum(bool(b) and not s['cached'] for b, s in zip(batches, source_states)),
@@ -305,12 +322,19 @@ def fetch_all(settings, log, control=None, public_only=False):
                'parsed': parsed, 'unique': len(frequencies), 'selected': len(selected),
                'not_selected': len(frequencies) - len(selected), 'limit': options.get('max_candidates', 1200)}
     report = {'sources': len(urls), 'sources_ok': successes, 'sources_failed': len(urls) - successes,
-              'github_sources': len(urls), 'github_sources_ok': successes, 'details': source_states,
-              'node_sources': provenance, 'unique': len(frequencies), 'summary': summary}
+              'github_sources': sum(s['hosting'] == 'GitHub 文件' for s in source_states),
+              'github_sources_ok': sum(bool(b) and s['hosting'] == 'GitHub 文件' for b, s in zip(batches, source_states)), 'details': source_states,
+              'node_sources': provenance, 'node_hosting': hosting, 'unique': len(frequencies), 'summary': summary}
     if health_file:
         write_json(health_file, health)
+        records = snapshot()
+        if '_only_source_keys' in options:
+            # Keep untouched results visible after a scoped download retry.
+            old = read_mapping(health_file.parent.parent / 'state/public-sources.json').get('sources', [])
+            changed = {record['name'] for record in records}
+            records = [r for r in old if isinstance(r, dict) and r.get('name') not in changed] + records if isinstance(old, list) else records
         write_json(health_file.parent.parent / 'state/public-sources.json',
-                   {'checked_at': time.time(), 'sources': snapshot(), 'summary': summary})
+                   {'checked_at': time.time(), 'sources': records, 'summary': summary})
     emit(f'去重 {len(frequencies)} 个，本轮送检 {len(selected)} 个；其余保留在来源缓存',
          unique=len(frequencies), selected=len(selected), not_selected=summary['not_selected'], summary=summary)
     if not selected: raise SourcesUnavailable(report)

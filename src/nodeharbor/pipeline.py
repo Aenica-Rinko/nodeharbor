@@ -16,6 +16,7 @@ from .source_plan import fair_candidates, verification_sources, persist_sources,
 from .verifier import verify_nodes
 from .tasks import Cancelled, TaskControl
 from .node_library import read_library, save_library
+from .node_history import read_history, record_history, plan_checks, signature
 
 
 def logger_for(paths, callback=None):
@@ -43,10 +44,15 @@ def status(paths):
     result['library_count'] = len(nodes)
     result['export_pending'] = bool(library_report.get('library_id') and
                                     library_report['library_id'] != result['report'].get('library_id'))
+    from .client_exports import verification_stale
+    result['library_stale'] = bool(nodes) and verification_stale(library_report)
+    result['export_stale'] = bool(result['export_dir']) and verification_stale(result['report'])
+    history = read_history(paths)
+    result['known_failed'] = sum(history.get(identity(n), {}).get('recent', [])[-1:] == [False] for n in nodes)
     return result
 
 
-def execute(paths, action="refresh-github", callback=None, control=None):
+def execute(paths, action="refresh-github", callback=None, control=None, full_check=False):
     control = control or TaskControl()
     log = logger_for(paths, callback)
     with app_lock(paths):
@@ -101,6 +107,9 @@ def execute(paths, action="refresh-github", callback=None, control=None):
                     if previous:
                         previous_sources = previous_report.get('node_sources', {})
                         for key, names in previous_sources.items(): source_report.setdefault('node_sources', {}).setdefault(key, names)
+                        from .public_links import node_hosting
+                        for key, kinds in node_hosting(previous_report).items():
+                            source_report.setdefault('node_hosting', {}).setdefault(key, kinds)
                     state['summary'] = source_report.get('summary', {})
                     control.emit('download', source_report.get('sources', 0), source_report.get('sources', 0),
                                  summary_text(state['summary']), unique=source_report.get('unique', 0),
@@ -111,10 +120,12 @@ def execute(paths, action="refresh-github", callback=None, control=None):
                     candidates = working_nodes
                     old_fetch = previous_report.get('fetch', {})
                     source_report = deepcopy(old_fetch) if isinstance(old_fetch, dict) else {}
+                    from .public_links import node_hosting
+                    source_report['node_hosting'] = node_hosting(previous_report)
                     source_report.setdefault('summary', {}).update(data_origin='recheck', downloaded=0, cache=0, stale_cache=0,
                                                                   history_candidates=len(candidates), selected=len(candidates))
                 elif action == "export":
-                    if not working_nodes: raise AppError('尚无免费节点，请先从 GitHub 公开源获取节点。')
+                    if not working_nodes: raise AppError('尚无免费节点，请先从已启用的公开源获取节点。')
                     candidates = working_nodes
                 else: raise AppError("未知操作。")
                 candidates = normalize_nodes(candidates)
@@ -124,24 +135,51 @@ def execute(paths, action="refresh-github", callback=None, control=None):
                     report = dict(previous_report, mode='reexport')
                     log('使用现有免费节点，重新生成全部客户端格式')
                 else:
-                    if engine == 'xray':
+                    history_records = read_history(paths)
+                    fingerprint = signature(engine, settings['verification'], core)
+                    testing, reused, deferred = plan_checks(candidates, working_nodes, previous_report,
+                        history_records, fingerprint, full=full_check or action in {'verify', 'verify-library'} or source_report.get('summary', {}).get('data_origin') == 'history_only')
+                    log(f'检测计划：本轮检查 {len(testing)} 个，沿用 10 分钟内结果 {len(reused)} 个，失败退避 {len(deferred)} 个。')
+                    control.emit('precheck', 0, len(testing), '检查新增或过期节点；完整重新检测可绕过历史复用',
+                                 reused=len(reused), deferred=len(deferred))
+                    if not testing:
+                        free, checks = [], {'protocol_tested': 0, 'stable': 0, 'quality': {}, 'delays_ms': {}, 'outcomes': {}}
+                    elif engine == 'xray':
                         from .xray_verifier import verify_xray
-                        free, checks = verify_xray(core, candidates, settings['verification'], log, control)
-                    else: free, checks = verify_nodes(core, candidates, settings["verification"], log, control)
+                        free, checks = verify_xray(core, testing, settings['verification'], log, control)
+                    else: free, checks = verify_nodes(core, testing, settings["verification"], log, control)
+                    control.check()
+                    checked_at = time.time()
+                    history_records = record_history(paths, history_records, testing, free, checks, fingerprint, checked_at)
+                    fresh_passed = len(free)
+                    free = normalize_nodes(free + reused)
+                    old_checks = previous_report.get('verification', {})
+                    for node in reused:
+                        key = identity(node)
+                        checks.setdefault('delays_ms', {})[key] = old_checks.get('delays_ms', {}).get(key, 0)
+                        checks.setdefault('quality', {})[key] = dict(old_checks['quality'][key], reused=True)
+                    checks.update(reused=len(reused), deferred=len(deferred), fresh_passed=fresh_passed,
+                                  verified=len(free), checked_this_run=len(testing),
+                                  reused_ids=[identity(n) for n in reused])
                     verification_sources(source_report, candidates, free, checks)
                     summary = source_report.setdefault('summary', {})
                     summary.update(passed=len(free), stable=checks.get('stable', 0), tested=checks.get('protocol_tested', 0),
-                                   unsupported=checks.get('unsupported', 0))
+                                   unsupported=checks.get('unsupported', 0), reused=len(reused), node_deferred=len(deferred),
+                                   fresh_passed=fresh_passed, checked_this_run=len(testing))
                     state['summary'] = summary
                     persist_sources(paths, source_report)
-                    control.emit('protocol', len(candidates), len(candidates), summary_text(summary), tested=summary['tested'],
+                    control.emit('protocol', len(testing), len(testing), summary_text(summary), tested=summary['tested'],
                                  passed=len(free), unsupported=summary['unsupported'], stable=summary['stable'], summary=summary,
                                  sources=[{k: v for k, v in source.items() if k not in {'key', 'node_ids'}} for source in source_report.get('details', [])])
-                    if not free: raise AppError('本轮没有节点通过 HTTP / HTTPS 检测。请查看来源结果、检测核心和网络；已有导出保持不变。')
+                    if not free:
+                        raise AppError('本轮没有节点通过 HTTP / HTTPS 检测。' + (f'{len(deferred)} 个连续失败节点暂缓重试，可在公开源的高级选项使用“获取并完整检测”，或等待退避结束后再次获取。' if deferred else '') + '请查看来源结果、检测核心和网络；已有导出保持不变。')
+                    evidence_times = [history_records.get(identity(n), {}).get('last_passed', checked_at) for n in free]
                     report = {"mode": action, "verification": checks, "fetch": source_report,
-                              "verified_at": datetime.now(timezone.utc).isoformat()}
+                              "verified_at": datetime.fromtimestamp(min(evidence_times), timezone.utc).isoformat(),
+                              "stability": {identity(n): history_records[identity(n)] for n in free if identity(n) in history_records}}
                     passed_ids = {identity(node) for node in free}
                     report['node_sources'] = {key: names for key, names in source_report.get('node_sources', {}).items() if key in passed_ids}
+                    report['node_hosting'] = {key: kinds for key, kinds in source_report.get('node_hosting', {}).items() if key in passed_ids}
                 report['export_core'] = 'mihomo' if core and engine == 'mihomo' else 'structure'
                 report['export_warning'] = '' if core and engine == 'mihomo' else '仅完成结构校验，未运行 Mihomo 配置检查；导出不代表重新检测。'
                 report['verification_core'] = previous_report.get('verification_core') if action == 'export' else engine
