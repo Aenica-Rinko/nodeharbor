@@ -34,8 +34,8 @@ class SettingsPage:
         self.label(panel, '核心 / 客户端路径（各客户端单独保存）', bold=True).pack(anchor='w', pady=(2, 8))
         row = tk.Frame(panel, bg=WHITE); row.pack(fill="x")
         self.core_path = tk.StringVar(value=self.core_profiles[self.editing_core_client])
-        ttk.Entry(row, textvariable=self.core_path).pack(side="left", fill="x", expand=True, padx=(0, 10))
         self.button(row, '选择客户端 / 核心', self.pick_core).pack(side='right')
+        ttk.Entry(row, textvariable=self.core_path).pack(side="left", fill="x", expand=True, padx=(0, 10))
         self.core_hint_label = tk.Label(panel, textvariable=self.core_hint_value, bg=WHITE, fg=MUTED,
                                       wraplength=660, justify='left', anchor='w')
         self.core_hint_label.pack(fill='x', pady=(8, 8))
@@ -69,8 +69,8 @@ class SettingsPage:
         self.label(panel, '导出根目录（留空使用默认位置）', bold=True).pack(anchor='w', pady=(18, 8))
         self.export_directory_value = tk.StringVar(value=settings['exports']['directory'])
         row = tk.Frame(panel, bg=WHITE); row.pack(fill='x')
+        self.button(row, '选择文件夹', self.pick_export_directory, task=True).pack(side='right', padx=(8, 0))
         ttk.Entry(row, textvariable=self.export_directory_value).pack(side='left', fill='x', expand=True)
-        self.button(row, '选择文件夹', self.pick_export_directory, task=True).pack(side='left', padx=(8, 0))
         self.label(panel, '自动按 Mihomo、clash-verge-Rev、v2rayN 分文件夹保存。更换目录时会复制已有导出，原文件保留。',
                    color=MUTED, wraplength=700, justify='left').pack(anchor='w', pady=(6, 0))
         self.label(self.main, "更多配置", 13, bold=True).pack(anchor="w", pady=(24, 14))

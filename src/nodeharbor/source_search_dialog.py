@@ -27,7 +27,8 @@ class SourceSearchDialog:
         self.window.transient(desktop.root)
         self.window.grab_set()
         self.window.protocol('WM_DELETE_WINDOW', self.close)
-        body = tk.Frame(self.window, bg=BG, padx=20, pady=18); body.pack(fill='both', expand=True)
+        body = tk.Frame(self.window, bg=BG, padx=12 if compact else 20, pady=10 if compact else 18)
+        body.pack(fill='both', expand=True)
         row = tk.Frame(body, bg=BG); row.pack(fill='x')
         self.search_kind = tk.StringVar(value='github')
         self.mode_buttons = []
@@ -61,9 +62,9 @@ class SourceSearchDialog:
         description_label = self.message(left, self.description, height=1 if compact else 2)
         description_label.pack(fill='x', pady=8)
         row = tk.Frame(left, bg=WHITE); row.pack(fill='x')
-        self.inspect_button = desktop.button(row, '查看订阅文件', self.inspect)
+        self.inspect_button = desktop.button(row, '查看文件' if compact else '查看订阅文件', self.inspect)
         self.inspect_button.pack(side='left')
-        self.open_button = desktop.button(row, '打开仓库说明', self.open_repository)
+        self.open_button = desktop.button(row, '仓库说明' if compact else '打开仓库说明', self.open_repository)
         self.open_button.pack(side='left', padx=(8, 0))
         self.join_button = desktop.button(row, '加入节点池', self.join_repository, primary=True)
         self.join_button.pack(side='left')
@@ -85,7 +86,8 @@ class SourceSearchDialog:
         row.pack_configure(side='bottom', before=self.file_tree.master)
         file_note_label.pack_configure(side='bottom', before=self.file_tree.master)
         row = tk.Frame(body, bg=BG); row.pack(side='bottom', before=panes, fill='x', pady=(12, 0))
-        desktop.label(row, '加入后默认停用；启用并获取节点后，到“订阅导出”生成文件。', color=MUTED,
+        desktop.label(row, '加入后默认停用，请回到来源列表启用。' if compact else
+                      '加入后默认停用；启用并获取节点后，到“订阅导出”生成文件。', color=MUTED,
                       wraplength=650, justify='left', anchor='w').pack(side='left', fill='x', expand=True)
         desktop.button(row, '关闭', self.close).pack(side='right', padx=(8, 0))
         self.set_scope()

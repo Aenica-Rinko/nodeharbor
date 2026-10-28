@@ -314,10 +314,12 @@ def test_cloudflare_search_ui_mode_selection_add_and_clear(desktop, monkeypatch)
 
 
 @pytest.mark.parametrize('factor', [1, 1.5, 2])
-def test_search_dialog_actions_remain_visible_at_scaled_fonts(tmp_path, factor):
+def test_search_dialog_actions_remain_visible_at_scaled_fonts(tmp_path, factor, monkeypatch):
     try: root = tk.Tk()
     except tk.TclError: pytest.skip('Display unavailable')
     root.tk.call('tk', 'scaling', (96 / 72) * factor)
+    monkeypatch.setattr(root, 'winfo_screenwidth', lambda: 1024)
+    monkeypatch.setattr(root, 'winfo_screenheight', lambda: 768)
     app = Desktop(root, Paths(tmp_path))
     try:
         app.open_source_search(); dialog = app.search_dialog
@@ -351,6 +353,7 @@ def test_layout_at_narrow_window_and_scaled_fonts(tmp_path, factor):
     except tk.TclError as error: pytest.skip('Display unavailable: ' + str(error))
     root.tk.call('tk', 'scaling', (96 / 72) * factor)
     root.withdraw()
+    root.maxsize(1024, 740)
     callbacks = []
     root.report_callback_exception = lambda *args: callbacks.append(args)
     app = Desktop(root, Paths(tmp_path))
