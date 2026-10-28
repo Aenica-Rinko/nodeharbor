@@ -65,7 +65,7 @@ class SourceSearchDialog:
         self.inspect_button.pack(side='left')
         self.open_button = desktop.button(row, '打开仓库说明', self.open_repository)
         self.open_button.pack(side='left', padx=(8, 0))
-        self.join_button = desktop.button(row, '加入 NodeHarbor 节点池', self.join_repository, primary=True)
+        self.join_button = desktop.button(row, '加入节点池', self.join_repository, primary=True)
         self.join_button.pack(side='left')
         desktop.flow(row)
         row.pack_configure(side='bottom', before=self.repo_tree.master)

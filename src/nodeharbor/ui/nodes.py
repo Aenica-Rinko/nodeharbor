@@ -20,7 +20,6 @@ class NodesPage:
         self.search = tk.StringVar()
         self.label(tools, '搜索节点', color=MUTED).pack(side='left', padx=(0, 8))
         entry = ttk.Entry(tools, textvariable=self.search)
-        entry.pack(side="left", fill="x", expand=True, padx=(0, 12))
         self.button(tools, '更多筛选', self.toggle_node_filters).pack(side='right')
         self.node_hint = tk.StringVar()
         tk.Label(self.main, textvariable=self.node_hint, bg=BG, fg=BLUE, anchor="w", justify="left",
@@ -69,6 +68,8 @@ class NodesPage:
         self.sort_nodes = tk.StringVar(value='稳定性优先')
         order = ttk.Combobox(tools, textvariable=self.sort_nodes, values=('稳定性优先', '延迟优先', '名称', '来源'), state='readonly', width=10)
         order.pack(side='right', padx=(0, 8)); order.bind('<<ComboboxSelected>>', lambda event: self.fill_nodes(reload=False))
+        # Reserve action and sort widths before the search field takes remaining space.
+        entry.pack(side='left', fill='x', expand=True, padx=(0, 12))
         self.fill_nodes()
 
     def toggle_node_filters(self):
