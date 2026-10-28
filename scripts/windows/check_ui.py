@@ -35,6 +35,10 @@ def scenario(case, scale, preview=False):
         stack.enter_context(patch('nodeharbor.ui.exports.find_core', side_effect=AppError('Fixture: no core')))
         stack.enter_context(patch('nodeharbor.source_search_dialog.SourceSearchDialog.start', return_value=None))
         root = tk.Tk()  # Missing Tcl/Tk fails this command; it must not silently skip.
+        if not preview:
+            # Exercise the same compact desktop on developer monitors and CI runners.
+            stack.enter_context(patch.object(root, 'winfo_screenwidth', return_value=min(1024, root.winfo_screenwidth())))
+            stack.enter_context(patch.object(root, 'winfo_screenheight', return_value=min(768, root.winfo_screenheight())))
         root.tk.call('tk', 'scaling', scale * 96 / 72)
         callbacks = []
         root.report_callback_exception = lambda *error: callbacks.append(error[0].__name__)
