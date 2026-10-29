@@ -10,7 +10,7 @@ from ..node_history import stability_text, stability_order, read_history, recent
 from ..public_links import HOSTING_TYPES, UNKNOWN_HOSTING, node_hosting
 from datetime import datetime, timezone
 from .common import BG, BLUE, MUTED, WHITE, display_time
-from .presentation import quality_label
+from .presentation import quality_label, node_evidence
 
 class NodesPage:
     def show_nodes(self):
@@ -82,6 +82,16 @@ class NodesPage:
             row = self.tree.item(selection[0], 'values')
             text = (f'{row[0]} · {row[1]} · {row[4]}\n服务器：{row[2]} · 最后通过：{row[7]} · 连续失败：{row[8]}\n'
                     f'跨轮记录：{row[6]}\n公开出处：{row[5]}\n订阅托管：{row[9]}（不代表节点出口）')
+            node = self.node_rows.get(selection[0])
+            if node:
+                key = identity(node)
+                checks = self.cached_node_report.get('verification', {})
+                quality = checks.get('quality', {}) if isinstance(checks, dict) else {}
+                quality = quality if isinstance(quality, dict) else {}
+                stored = self.cached_node_report.get('stability', {})
+                history = dict(stored) if isinstance(stored, dict) else {}
+                history.update(getattr(self, 'cached_node_history', {}))
+                text += '\n\n检测依据：\n' + node_evidence(quality.get(key), history.get(key))
         else: text = '选择节点查看服务器、公开出处和跨轮检测记录。认证信息不会显示。'
         self.node_detail.configure(state='normal'); self.node_detail.delete('1.0', 'end')
         self.node_detail.insert('1.0', text); self.node_detail.configure(state='disabled')

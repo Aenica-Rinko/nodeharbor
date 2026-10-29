@@ -121,7 +121,7 @@ class ExportsPage:
         text = file.read_text(encoding='utf-8')
         if not text.strip(): raise AppError('链接文件为空，请重新生成导出。')
         self.copy(text)
-        self.state_text.set(f'已复制 {count} 个节点链接；在 v2rayN 的节点列表区域按 Ctrl+V 导入。')
+        self.state_text.set(f'已复制 {count} 个节点链接；在 v2rayN 节点列表按 Ctrl+V。粘贴会追加，旧节点不会自动删除。')
 
     def prepare_export(self, action):
         if self.busy: return

@@ -8,7 +8,7 @@ from ..config import find_core, core_kind, validate_core, load_settings, validat
 from ..storage import AppError, app_lock, write_yaml
 from ..public_sources import selected_pools
 from ..source_catalog import enabled_urls
-from .common import BG, INK, MUTED, WHITE, open_help, open_path
+from .common import BG, INK, MUTED, WHITE, open_help, open_path, input_actions
 
 class SettingsPage:
     def show_settings(self):
@@ -34,8 +34,9 @@ class SettingsPage:
         self.label(panel, '核心 / 客户端路径（各客户端单独保存）', bold=True).pack(anchor='w', pady=(2, 8))
         row = tk.Frame(panel, bg=WHITE); row.pack(fill="x")
         self.core_path = tk.StringVar(value=self.core_profiles[self.editing_core_client])
-        self.button(row, '选择客户端 / 核心', self.pick_core).pack(side='right')
-        ttk.Entry(row, textvariable=self.core_path).pack(side="left", fill="x", expand=True, padx=(0, 10))
+        input_actions(row, self.core_path, self.button, [('选择客户端 / 核心', self.pick_core, {})])
+        self.label(panel, '已有客户端：选择其主程序，应用会在安装目录查找核心。没有客户端：使用下方官方下载。选择后点击“检查核心是否可用”，成功后保存设置。',
+                   color=MUTED, wraplength=660, justify='left').pack(fill='x', pady=(8, 0))
         self.core_hint_label = tk.Label(panel, textvariable=self.core_hint_value, bg=WHITE, fg=MUTED,
                                       wraplength=660, justify='left', anchor='w')
         self.core_hint_label.pack(fill='x', pady=(8, 8))
@@ -69,8 +70,7 @@ class SettingsPage:
         self.label(panel, '导出根目录（留空使用默认位置）', bold=True).pack(anchor='w', pady=(18, 8))
         self.export_directory_value = tk.StringVar(value=settings['exports']['directory'])
         row = tk.Frame(panel, bg=WHITE); row.pack(fill='x')
-        self.button(row, '选择文件夹', self.pick_export_directory, task=True).pack(side='right', padx=(8, 0))
-        ttk.Entry(row, textvariable=self.export_directory_value).pack(side='left', fill='x', expand=True)
+        input_actions(row, self.export_directory_value, self.button, [('选择文件夹', self.pick_export_directory, {'task': True})])
         self.label(panel, '自动按 Mihomo、clash-verge-Rev、v2rayN 分文件夹保存。更换目录时会复制已有导出，原文件保留。',
                    color=MUTED, wraplength=700, justify='left').pack(anchor='w', pady=(6, 0))
         self.label(self.main, "更多配置", 13, bold=True).pack(anchor="w", pady=(24, 14))

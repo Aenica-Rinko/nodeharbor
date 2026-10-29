@@ -10,8 +10,8 @@ from ..source_plan import summary_text, read_mapping
 from ..source_catalog import user_pools, validate_pools, add_pool, repository_of, remove_pool, replace_pool, update_catalog, pool_health
 from ..tasks import NETWORK_ERRORS
 from ..public_links import HOSTING_TYPES, pool_hosting
-from .common import BG, BLUE, MUTED, WHITE, display_time
-from .presentation import source_matches, needs_attention
+from .common import BG, BLUE, MUTED, WHITE, display_time, input_actions
+from .presentation import source_matches, needs_attention, source_evidence
 import webbrowser
 
 class SourcesPage:
@@ -29,9 +29,8 @@ class SourcesPage:
         row = tk.Frame(self.main, bg=BG); row.pack(fill='x', pady=(0, 10))
         self.button(self.header_actions, '搜索节点池', self.open_source_search, task=True).pack(side='left', padx=(0, 8))
         self.button(self.header_actions, '获取节点', self.fetch_public_sources, True, True).pack(side='left')
-        self.label(row, '来源搜索', color=MUTED).pack(side='left', padx=(0, 8))
-        self.button(row, '更多选项', self.toggle_source_advanced).pack(side='right')
-        ttk.Entry(row, textvariable=self.source_query, width=18).pack(side='left', fill='x', expand=True, padx=(0, 8))
+        self.label(row, '来源搜索', color=MUTED).pack(anchor='w', pady=(0, 4))
+        input_actions(row, self.source_query, self.button, [('更多选项', self.toggle_source_advanced, {})], width=18)
         filters = tk.Frame(self.main, bg=BG); filters.pack(fill='x', pady=(0, 12))
         category = ttk.Combobox(filters, textvariable=self.source_filter, values=('全部', '已启用', '未启用', '需处理'), state='readonly', width=9)
         category.pack(side='left')
@@ -177,6 +176,11 @@ class SourcesPage:
                 if record.get('failure_reason'): text += ' · 原因：' + str(record['failure_reason'])
                 if record.get('next_retry'): text += ' · 下次重试：' + display_time(record['next_retry'])
         text += '\n最近下载成功：' + display_time(state.get('last_success')) + f" · 连续失败 {state.get('failures', 0)} 次"
+        if selected[0].startswith('pool-'):
+            for number, record in enumerate(state.get('files', []), 1):
+                text += f'\n文件 {number} 的贡献依据：' + source_evidence(record)
+        else:
+            text += '\n贡献依据：' + source_evidence(state)
         if state.get('next_retry'): text += ' · 下次重试：' + display_time(state['next_retry'])
         attempts = state.get('attempts', [])
         if attempts:
